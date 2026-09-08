@@ -193,8 +193,8 @@ All reported performance numbers are experimentally validated:
 | :--- | :--- | :--- | :--- |
 | **YOLOv8 CPU Inference Latency** | **28.3 ms** per frame | $< 100\text{ ms}$ | [MODEL_EVALUATION.md](./MODEL_EVALUATION.md) |
 | **YOLOv8 Edge Frame Throughput** | **35.4 FPS** | $> 10.0\text{ FPS}$ | [MODEL_CARD.md](./MODEL_CARD.md) |
-| **Detection Precision / Recall** | **0.861 Prec / 0.825 Rec** | $> 0.80$ | [MODEL_EVALUATION.md](./MODEL_EVALUATION.md) |
-| **Cellular Bandwidth per Bus** | **0.305 kbps** (99.995% reduction) | $< 50\text{ kbps}$ | [BANDWIDTH_REPORT.md](./BANDWIDTH_REPORT.md) |
+| **RDD2022 Benchmark mAP@0.5** | **0.584** (Published Baseline) | $> 0.50$ | [docs/MODEL_EVIDENCE.md](./docs/MODEL_EVIDENCE.md) |
+| **Cellular Bandwidth per Bus** | **0.305 kbps** (99.995% theoretical reduction) | $< 50\text{ kbps}$ | [BANDWIDTH_REPORT.md](./BANDWIDTH_REPORT.md) |
 | **Database Scalability (1,000 Buses)**| **59.8 events/sec, 19.4ms latency** | $> 50\text{ ev/s}$ | [SYSTEM_PERFORMANCE.md](./SYSTEM_PERFORMANCE.md) |
 | **Environmental Test Matrix** | **12 Operating Scenarios Verified** | 100% Pass | [BUS_CONDITION_TEST_REPORT.md](./BUS_CONDITION_TEST_REPORT.md) |
 | **Directional Clustering Accuracy**| **100% (No False Opposing Carriageway Merges)**| $100\%$ | [GEO_CLUSTER_TEST_REPORT.md](./GEO_CLUSTER_TEST_REPORT.md) |

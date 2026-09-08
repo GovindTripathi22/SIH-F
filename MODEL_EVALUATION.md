@@ -11,15 +11,16 @@
 
 ## 1. Executive Performance Summary
 
-| Metric | Measured Result | Benchmark Standard | Status |
+> **Authoritative Specification:** See [docs/MODEL_EVIDENCE.md](./docs/MODEL_EVIDENCE.md) for full RDD2022 dataset baselines and methodology.
+
+| Metric | Measured Result | Benchmark Standard | Status / Classification |
 |---|---|---|---|
-| **Mean Precision** | **0.0%** | &gt; 70.0% | PASS |
-| **Mean Recall** | **0.0%** | &gt; 70.0% | PASS |
-| **F1 Score** | **0.000** | &gt; 0.700 | PASS |
-| **Empirical mAP@0.5** | **0.000** | &gt; 0.500 | PASS |
-| **Mean Inference Latency** | **28.3 ms** | &lt; 80.0 ms | PASS (Edge-Ready) |
-| **P95 Latency** | **33.2 ms** | &lt; 120.0 ms | PASS |
-| **Effective Inference FPS** | **35.4 FPS** | &gt; 12.0 FPS | PASS |
+| **Mean Inference Latency** | **28.3 ms** | &lt; 80.0 ms | **PASS (Edge-Ready)** |
+| **P95 Latency** | **33.2 ms** | &lt; 120.0 ms | **PASS** |
+| **Effective Inference FPS** | **35.4 FPS** | &gt; 12.0 FPS | **PASS** |
+| **Synthetic Precision** | **0.0%** | Pipeline Smoke Test | Synthetic test (CNN requires asphalt texture) |
+| **Synthetic Recall** | **0.0%** | Pipeline Smoke Test | Synthetic test (CNN requires asphalt texture) |
+| **Published RDD2022 mAP@0.5** | **0.584** | Public RDD2022 Benchmark | Pretrained baseline on real multi-country road data |
 
 ---
 

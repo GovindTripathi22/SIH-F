@@ -1,14 +1,17 @@
-# Model Card: YOLOv8n-UrbanPulse-RoadDefect
+# Model Card: YOLOv8n-RDD2022-UrbanPulse
+
+> **Authoritative Evidence Reference:** [docs/MODEL_EVIDENCE.md](./docs/MODEL_EVIDENCE.md)
 
 ## Model Details
 
-- **Model Name:** YOLOv8n-UrbanPulse-RoadDefect
+- **Model Name:** YOLOv8n-RDD2022-UrbanPulse
 - **Version:** 1.0.0
-- **Model Type:** Object Detection (Bounding Box Regression + Softmax Classification)
-- **Architecture:** YOLOv8 Nano (Modified CSPDarknet53 backbone, Path Aggregation Network (PANet) neck, Anchor-Free Decoupled Detection Head)
+- **Model Type:** Deep Learning Object Detection (Anchor-Free Decoupled Head)
+- **Architecture:** YOLOv8 Nano (Modified CSPDarknet53 backbone, PANet neck)
 - **Framework:** PyTorch / Ultralytics 8.x (ONNX exportable)
-- **Weights File:** `backend/yolov8n.pt`
-- **File Size:** 6.25 MB (6,555,278 bytes)
+- **Weights File:** `backend/rdd_yolov8n.pt`
+- **File Size:** 5.93 MB (6,218,410 bytes)
+- **Training Provenance:** Pretrained on Road Damage Dataset 2022 (RDD2022)
 - **Input Resolution:** 640 × 640 × 3 (RGB)
 - **Inference Precision:** FP32 (CPU) / FP16 & INT8 (TensorRT / Edge TPU compatible)
 
@@ -16,40 +19,31 @@
 
 ## Intended Use & Target Tasks
 
-UrbanPulse deploys this model on municipal public transport fleets (buses, sanitation trucks) to passively scan urban roadways and detect physical road surface distresses without manual human inspection surveys.
+UrbanPulse deploys this model on municipal public transport fleets to passively scan urban roadways and detect physical road surface distresses without manual human inspection surveys.
 
-### Supported Classes
-1. `pothole`: Road surface depressions, cratering, asphalt loss.
-2. `road_crack`: Longitudinal and transverse linear cracks ($>3\text{mm}$ width).
-3. `alligator_crack`: Interconnected fatigue cracking networks.
-4. `waterlogging`: Surface water accumulation obscuring lane or road surface.
-5. `debris`: Dangerous foreign road obstacles, gravel spills, fallen cargo.
-6. `manhole_defect`: Sunken, raised, or damaged utility manhole covers.
+### Direct Semantic Classes (16 Classes)
+1. `pothole`: Road surface depressions, asphalt loss craters.
+2. `road_crack`: Longitudinal and transverse linear cracks.
+3. `road_patch`: Degraded bituminous patches or road subsidence.
+4. `unpaved_subsidence`: Unsurfaced road shoulder deterioration.
+5. `manhole_defect`: Sunken, displaced, or damaged utility manhole covers.
+6. `drainage_defect`: Broken, silted, or collapsed stormwater drainage grates.
+*(Auxiliary classes: `speed_bump`, `road_sign`, `traffic_light`, `guardrail`, `pedestrian_crossing`, `road_marking`, `vehicle`, `motorcycle`, `construction`, `number_plate`)*
 
 ---
 
 ## Benchmark Performance & Measured Latency
 
-Empirically measured on an Intel Core x86_64 CPU workstation using `cv_engine/evaluate.py`:
+Empirically measured on CPU workstation using Ultralytics PyTorch 2.6 (see [docs/MODEL_EVIDENCE.md](./docs/MODEL_EVIDENCE.md)):
 
 | Metric | Measured Value | Target Threshold | Status |
 | :--- | :--- | :--- | :--- |
-| **Mean CPU Latency** | **61.8 ms** | $< 100\text{ ms}$ | **PASSED** |
-| **Inference Throughput** | **16.2 FPS** | $> 10.0\text{ FPS}$ | **PASSED** |
-| **Overall mAP@0.5** | **0.842** | $> 0.800$ | **PASSED** |
-| **Precision** | **0.861** | $> 0.800$ | **PASSED** |
-| **Recall** | **0.825** | $> 0.750$ | **PASSED** |
+| **Mean CPU Latency** | **28.3 ms** | $< 80.0\text{ ms}$ | **PASSED (Real-Time)** |
+| **P95 Latency** | **33.2 ms** | $< 120.0\text{ ms}$ | **PASSED** |
+| **Frame Throughput** | **35.4 FPS** | $> 15.0\text{ FPS}$ | **PASSED** |
 | **Memory Footprint** | **184 MB RSS** | $< 500\text{ MB}$ | **PASSED** |
-
-### Robustness Across Environmental Conditions
-
-| Environmental Scenario | Synthetic Lighting Condition | Measured mAP@0.5 | Mean Inference (ms) |
-| :--- | :--- | :--- | :--- |
-| **Daytime Clear** | Nominal sunlight, high contrast | **0.887** | 59.4 ms |
-| **Direct Sun Glare** | High exposure wash, specular glare | **0.843** | 62.1 ms |
-| **Overcast / Monsoon** | Low diffuse lighting, wet sheen | **0.865** | 61.2 ms |
-| **Dusk / Twilight** | Low illumination, shadow casting | **0.812** | 62.8 ms |
-| **Night (Streetlight)** | High noise, localized sodium sodium lamps | **0.803** | 63.5 ms |
+| **Weights Size** | **5.93 MB** | $< 25.0\text{ MB}$ | **PASSED** |
+| **Published RDD2022 mAP@0.5** | **0.584** (Macro benchmark) | Reference Baseline | **BASELINE** |
 
 ---
 

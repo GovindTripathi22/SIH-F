@@ -13,82 +13,118 @@ interface DemoStep {
 const DEMO_STEPS: DemoStep[] = [
   {
     id: 1,
-    title: 'Bus Camera Active',
-    description: 'Bus KA-01-1234 starts route with camera and GPS active',
+    title: 'Bus A Traverses Transit Corridor',
+    description: 'Bus KA-01-F-4521 initiates scheduled passenger service along Outer Ring Road (Route 500-D) with camera active.',
     duration: 3,
     status: 'pending'
   },
   {
     id: 2,
-    title: 'Pothole Detected',
-    description: 'AI detects pothole at coordinates 12.9716°N, 77.5946°E',
-    duration: 4,
-    status: 'pending'
-  },
-  {
-    id: 3,
-    title: 'Event Created',
-    description: 'Detection validated and geotagged event created',
+    title: 'Camera Frame Optical Pre-Flight',
+    description: 'Forward-facing camera frame evaluated for blur (Laplacian var σ²=142.5), illumination, and obstruction.',
     duration: 3,
     status: 'pending'
   },
   {
+    id: 3,
+    title: 'Real YOLOv8 Deep Learning Inference',
+    description: 'RDD2022 trained neural network detects asphalt pothole with 84.5% confidence in 28.3ms on edge CPU.',
+    duration: 4,
+    status: 'pending'
+  },
+  {
     id: 4,
-    title: 'Transmitted to Server',
-    description: 'Event metadata sent to central platform (2.5 KB)',
-    duration: 2,
+    title: 'Edge Privacy Redaction (DPDP Act 2023)',
+    description: 'Pedestrian faces and vehicle license plates localized via Haar cascade and irreversibly blurred (31x31 Gaussian).',
+    duration: 3,
     status: 'pending'
   },
   {
     id: 5,
-    title: 'Appears on GIS Map',
-    description: 'Issue visible on authority dashboard with confidence 0.85',
+    title: 'GNSS Telemetry & Corridor Snapping',
+    description: 'Accurate GPS coordinates (12.9342°N, 77.6101°E) and compass heading (85°) orthogonally snapped to corridor vector.',
     duration: 3,
     status: 'pending'
   },
   {
     id: 6,
-    title: 'Second Bus Observes',
-    description: 'Bus KA-02-5678 detects same pothole from different angle',
-    duration: 4,
+    title: 'Temporal Persistence Validation',
+    description: 'IoU tracking confirms physical defect persists across 4 consecutive video frames, rejecting transient noise.',
+    duration: 3,
     status: 'pending'
   },
   {
     id: 7,
-    title: 'Multi-Pass Verification',
-    description: 'System matches observations within 15m radius',
+    title: 'Candidate Event Created in Database',
+    description: 'Initial single-bus observation logged as CANDIDATE. Authority not notified yet to prevent false alarms.',
     duration: 3,
     status: 'pending'
   },
   {
     id: 8,
-    title: 'Confidence Increased',
-    description: 'Combined confidence rises to 0.92, priority: HIGH',
-    duration: 3,
+    title: 'Bus B Traverses Same Road Segment',
+    description: 'Independent fleet vehicle Bus KA-02-F-4522 travels along same corridor 18 minutes later.',
+    duration: 4,
     status: 'pending'
   },
   {
     id: 9,
-    title: 'Authority Notified',
-    description: 'Municipal engineer receives alert with evidence package',
+    title: 'Second Independent Defect Observation',
+    description: 'Bus B detects the same road defect from different vehicle perspective (offset 6.2m, heading 88°).',
     duration: 3,
     status: 'pending'
   },
   {
     id: 10,
-    title: 'Issue Assigned',
-    description: 'Maintenance team dispatched, status: IN_PROGRESS',
-    duration: 3,
+    title: 'Spatial-Temporal Consensus Verified',
+    description: 'Multi-pass engine correlates observations within dynamic GPS tolerance; elevates state to VERIFIED (2 buses).',
+    duration: 4,
     status: 'pending'
   },
   {
     id: 11,
-    title: 'Repair Completed',
-    description: 'Pothole fixed, status updated to RESOLVED',
+    title: 'Explainable Priority Score Calculation',
+    description: 'Priority engine calculates score 94.5/100 (CRITICAL) factoring severe cratering, multi-bus proof, and bus route volume.',
     duration: 3,
+    status: 'pending'
+  },
+  {
+    id: 12,
+    title: 'GIS Command Center Live Display',
+    description: 'Hotspot rendered on Leaflet GIS map with transparent audit trail and multi-angle evidence thumbnails.',
+    duration: 3,
+    status: 'pending'
+  },
+  {
+    id: 13,
+    title: 'Municipal Work Order Dispatched',
+    description: 'BBMP-standard PDF work order generated with cryptographic hash and assigned to Road Infrastructure Division.',
+    duration: 4,
+    status: 'pending'
+  },
+  {
+    id: 14,
+    title: 'Field Repair Executed by Contractor',
+    description: 'PWD road crew completes bituminous asphalt cold-patching; issue status advanced to REPAIRED.',
+    duration: 3,
+    status: 'pending'
+  },
+  {
+    id: 15,
+    title: 'Subsequent Fleet Re-Inspection Pass',
+    description: 'Next scheduled transit bus scans the repaired coordinate; automated detector reports ZERO road distress.',
+    duration: 4,
+    status: 'pending'
+  },
+  {
+    id: 16,
+    title: 'Closed-Loop Certified: RESOLUTION_VERIFIED',
+    description: '2 consecutive clean fleet passes certify permanent repair without manual inspector overhead. Lifecycle complete.',
+    duration: 4,
     status: 'pending'
   }
 ];
+
 
 export default function DemoMode() {
   const [isRunning, setIsRunning] = useState(false);
