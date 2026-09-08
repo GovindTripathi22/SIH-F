@@ -4,7 +4,7 @@ import { EventList } from './components/EventList';
 import { FleetPanel } from './components/FleetPanel';
 import { PipelineView } from './components/PipelineView';
 import { StatsBar } from './components/StatsBar';
-import { ArchitectureView } from './components/ArchitectureView';
+import ArchitectureView from './components/ArchitectureView';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { simulatedEvents, simulatedBuses, dashboardStats } from './data';
 

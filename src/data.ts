@@ -6,9 +6,6 @@
 
 import { RoadEvent, Bus, PipelineStage, DashboardStats } from './types';
 
-// Bengaluru coordinates for realistic simulation
-const BENGALURU_CENTER = { lat: 12.9716, lng: 77.5946 };
-
 export const simulatedBuses: Bus[] = [
   {
     id: 'BUS-KA01-001',
@@ -114,6 +111,8 @@ export const simulatedEvents: RoadEvent[] = [
     severity: 7,
     description: 'Large pothole (~40cm diameter) on main carriageway, right lane',
     address: '80 Feet Road, Koramangala 4th Block',
+    createdAt: new Date(Date.now() - 7200000).toISOString(),
+    updatedAt: new Date(Date.now() - 600000).toISOString(),
   },
   {
     id: 'EVT-002',
@@ -142,6 +141,8 @@ export const simulatedEvents: RoadEvent[] = [
     severity: 5,
     description: 'Network cracking pattern on road surface, ~3m length',
     address: 'ITPL Main Road, Whitefield',
+    createdAt: new Date(Date.now() - 10800000).toISOString(),
+    updatedAt: new Date(Date.now() - 1800000).toISOString(),
   },
   {
     id: 'EVT-003',
@@ -184,6 +185,8 @@ export const simulatedEvents: RoadEvent[] = [
     severity: 9,
     description: 'Severe waterlogging at intersection, depth ~30cm, blocking right turn',
     address: 'Marathahalli Bridge Junction',
+    createdAt: new Date(Date.now() - 5400000).toISOString(),
+    updatedAt: new Date(Date.now() - 900000).toISOString(),
   },
   {
     id: 'EVT-004',
@@ -205,6 +208,8 @@ export const simulatedEvents: RoadEvent[] = [
     severity: 3,
     description: 'Possible pothole detected, single observation — needs re-confirmation',
     address: 'Yelahanka New Town Road',
+    createdAt: new Date(Date.now() - 1800000).toISOString(),
+    updatedAt: new Date(Date.now() - 1800000).toISOString(),
   },
   {
     id: 'EVT-005',
@@ -240,6 +245,8 @@ export const simulatedEvents: RoadEvent[] = [
     severity: 6,
     description: 'Persistent congestion — average speed < 10 km/h for 15+ minutes',
     address: 'Mysore Road Junction',
+    createdAt: new Date(Date.now() - 900000).toISOString(),
+    updatedAt: new Date(Date.now() - 120000).toISOString(),
   },
   {
     id: 'EVT-006',
@@ -268,6 +275,8 @@ export const simulatedEvents: RoadEvent[] = [
     severity: 3,
     description: 'Speed limit sign damaged/tilted, partially obscured',
     address: 'HSR Layout Sector 2',
+    createdAt: new Date(Date.now() - 4800000).toISOString(),
+    updatedAt: new Date(Date.now() - 2400000).toISOString(),
   },
   {
     id: 'EVT-007',
@@ -303,6 +312,8 @@ export const simulatedEvents: RoadEvent[] = [
     severity: 8,
     description: 'Multiple potholes in cluster, ~60cm total width, hazard for two-wheelers',
     address: 'Sarjapur Road, Near Bellandur',
+    createdAt: new Date(Date.now() - 14400000).toISOString(),
+    updatedAt: new Date(Date.now() - 7200000).toISOString(),
   },
   {
     id: 'EVT-008',
@@ -331,6 +342,8 @@ export const simulatedEvents: RoadEvent[] = [
     severity: 5,
     description: 'Zebra crossing faded/missing near school zone',
     address: 'CMR Road, Indiranagar',
+    createdAt: new Date(Date.now() - 6000000).toISOString(),
+    updatedAt: new Date(Date.now() - 3000000).toISOString(),
   },
 ];
 
