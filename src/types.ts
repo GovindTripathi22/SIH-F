@@ -77,6 +77,8 @@ export interface RoadEvent {
   address?: string;
   frameReference?: string;
   cameraId?: string;
+  confidence?: number;
+  verification_state?: string;
   speedKmh?: number;
   heading?: number;
   createdAt: string;

@@ -66,7 +66,7 @@ export default function App() {
   const [liveIssues, setLiveIssues] = useState<RoadEvent[]>([]);
   const [liveBuses, setLiveBuses] = useState<Bus[]>([]);
   const [isLiveBackend, setIsLiveBackend] = useState<boolean>(false);
-  const [healthData, setHealthData] = useState<BackendHealth | null>(null);
+  const [, setHealthData] = useState<BackendHealth | null>(null);
 
   const fetchLiveBackendData = useCallback(async () => {
     try {
@@ -104,32 +104,34 @@ export default function App() {
     : (mode === 'DEMO' ? simulatedBuses : simulatedBuses.map(b => ({ ...b, status: 'idle' })));
 
   const tabs: { id: Tab; label: string; icon: string }[] = [
-    { id: 'command', label: 'Command', icon: 'fa-tower-broadcast' },
-    { id: 'gis', label: 'GIS Map', icon: 'fa-map-location-dot' },
-    { id: 'demo', label: 'SIH Demo', icon: 'fa-play-circle' },
-    { id: 'failures', label: 'Failures', icon: 'fa-shield-halved' },
+    { id: 'command', label: 'Command Deck', icon: 'fa-tower-broadcast' },
+    { id: 'gis', label: 'GIS Matrix', icon: 'fa-map-location-dot' },
+    { id: 'demo', label: '16-Step SIH Demo', icon: 'fa-play-circle' },
+    { id: 'failures', label: 'Failure Controls', icon: 'fa-shield-halved' },
     { id: 'dashboard', label: 'Overview', icon: 'fa-gauge-high' },
-    { id: 'events', label: 'Events', icon: 'fa-triangle-exclamation' },
-    { id: 'fleet', label: 'Fleet', icon: 'fa-bus' },
-    { id: 'pipeline', label: 'Pipeline', icon: 'fa-diagram-project' },
-    { id: 'cv-demo', label: 'CV Engine', icon: 'fa-video' },
-    { id: 'temporal', label: 'Temporal', icon: 'fa-clock-rotate-left' },
-    { id: 'analytics', label: 'Analytics', icon: 'fa-chart-line' },
-    { id: 'architecture', label: 'Architecture', icon: 'fa-sitemap' },
+    { id: 'events', label: 'Distress Feed', icon: 'fa-triangle-exclamation' },
+    { id: 'fleet', label: 'Fleet Telemetry', icon: 'fa-bus' },
+    { id: 'pipeline', label: 'Pipeline Architecture', icon: 'fa-diagram-project' },
+    { id: 'cv-demo', label: 'Edge YOLOv8', icon: 'fa-video' },
+    { id: 'temporal', label: 'Temporal Tracker', icon: 'fa-clock-rotate-left' },
+    { id: 'analytics', label: 'Civic Analytics', icon: 'fa-chart-line' },
+    { id: 'architecture', label: 'Specs & Evidence', icon: 'fa-sitemap' },
   ];
 
   // Mode banner rendering
   const renderModeBanner = () => {
     if (mode === 'LIVE' && !isLiveBackend) {
       return (
-        <div className="bg-red-950/90 border-b border-red-800/90 px-6 py-2 text-xs text-red-200 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2">
-            <i className="fa-solid fa-triangle-exclamation text-red-400 animate-pulse"></i>
-            <span><strong>LIVE BACKEND OFFLINE:</strong> FastAPI server at <code>http://127.0.0.1:8001</code> is unreachable. Live database polling paused. Switch to <strong>DEMO MODE</strong> to inspect the deterministic seeded Bangalore fleet scenario.</span>
+        <div className="bg-rose-950/90 border-b border-rose-800/90 px-6 py-2 text-xs text-rose-200 flex items-center justify-between shrink-0 shadow-inner">
+          <div className="flex items-center gap-2.5">
+            <i className="fa-solid fa-triangle-exclamation text-rose-400 animate-pulse"></i>
+            <span>
+              <strong>LIVE BACKEND OFFLINE:</strong> FastAPI server at <code>http://127.0.0.1:8001</code> is unreachable. Live database polling paused. Switch to <strong>DEMO MODE</strong> to inspect the deterministic seeded Bangalore fleet scenario.
+            </span>
           </div>
           <button
             onClick={() => setMode('DEMO')}
-            className="px-3 py-1 bg-red-800 hover:bg-red-700 text-white rounded text-[11px] font-semibold transition"
+            className="px-3 py-1 bg-rose-800 hover:bg-rose-700 text-white rounded-md text-[11px] font-bold transition shadow-sm font-mono"
           >
             Switch to Demo Mode
           </button>
@@ -138,32 +140,32 @@ export default function App() {
     }
     if (mode === 'DEMO') {
       return (
-        <div className="bg-purple-950/80 border-b border-purple-800/80 px-6 py-1.5 text-xs text-purple-200 flex items-center justify-between shrink-0">
+        <div className="bg-purple-950/80 border-b border-purple-800/80 px-6 py-1.5 text-xs text-purple-200 flex items-center justify-between shrink-0 font-mono">
           <div className="flex items-center gap-2">
             <i className="fa-solid fa-play-circle text-purple-400"></i>
-            <span><strong>DEMO MODE ACTIVE:</strong> Viewing deterministic seeded Bangalore fleet scenario (5 buses, 3 corridors). To inspect live database tables, switch to <strong>LIVE MODE</strong>.</span>
+            <span><strong>DEMO MODE ACTIVE:</strong> Viewing deterministic seeded Bangalore fleet scenario (5 buses, 3 transit corridors).</span>
           </div>
           <button
             onClick={() => { setMode('LIVE'); fetchLiveBackendData(); }}
             className="px-2.5 py-0.5 bg-purple-800 hover:bg-purple-700 text-white rounded text-[11px] font-semibold transition"
           >
-            Connect to Live Backend
+            Connect Live Database
           </button>
         </div>
       );
     }
     if (mode === 'OFFLINE') {
       return (
-        <div className="bg-amber-950/80 border-b border-amber-800/80 px-6 py-1.5 text-xs text-amber-200 flex items-center justify-between shrink-0">
+        <div className="bg-amber-950/80 border-b border-amber-800/80 px-6 py-1.5 text-xs text-amber-200 flex items-center justify-between shrink-0 font-mono">
           <div className="flex items-center gap-2">
             <i className="fa-solid fa-hard-drive text-amber-400"></i>
-            <span><strong>OFFLINE RESILIENCE BUFFER ACTIVE:</strong> Simulating edge cellular network severance. All detections are persisted in local SQLite FIFO storage (<code>edge_queue.db</code>).</span>
+            <span><strong>OFFLINE BUFFER ACTIVE:</strong> Simulating edge cellular network severance. Detections queued in local SQLite FIFO storage (<code>edge_queue.db</code>).</span>
           </div>
           <button
             onClick={() => { setMode('LIVE'); fetchLiveBackendData(); }}
             className="px-2.5 py-0.5 bg-amber-800 hover:bg-amber-700 text-white rounded text-[11px] font-semibold transition"
           >
-            Restore Network Sync
+            Restore Sync
           </button>
         </div>
       );
@@ -173,33 +175,33 @@ export default function App() {
 
   // Mode Switcher Buttons
   const renderModeToggle = () => (
-    <div className="flex items-center gap-1 bg-gray-950 p-1 rounded-lg border border-gray-800 text-[11px]">
+    <div className="flex items-center gap-1 bg-[#090e1c] p-1 rounded-xl border border-slate-800/90 text-[11px] font-mono shadow-inner">
       <button
         onClick={() => { setMode('LIVE'); fetchLiveBackendData(); }}
-        className={`px-2.5 py-1 rounded font-medium transition flex items-center gap-1.5 ${
+        className={`px-3 py-1 rounded-lg font-bold transition flex items-center gap-1.5 ${
           mode === 'LIVE'
-            ? (isLiveBackend ? 'bg-emerald-600 text-white shadow-sm' : 'bg-red-600 text-white animate-pulse')
-            : 'text-gray-400 hover:text-gray-200'
+            ? (isLiveBackend ? 'bg-emerald-600/90 text-white shadow-sm shadow-emerald-500/30 border border-emerald-400/40 glow-emerald' : 'bg-rose-600/90 text-white animate-pulse border border-rose-400/40')
+            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
         }`}
         title="Connect to live FastAPI & PostGIS/SQLite backend"
       >
-        <span className={`w-1.5 h-1.5 rounded-full ${isLiveBackend ? 'bg-white' : 'bg-red-200'}`}></span>
-        LIVE MODE
+        <span className={`w-1.5 h-1.5 rounded-full ${isLiveBackend ? 'bg-white' : 'bg-rose-200'}`}></span>
+        LIVE
       </button>
       <button
         onClick={() => setMode('DEMO')}
-        className={`px-2.5 py-1 rounded font-medium transition flex items-center gap-1.5 ${
-          mode === 'DEMO' ? 'bg-purple-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'
+        className={`px-3 py-1 rounded-lg font-bold transition flex items-center gap-1.5 ${
+          mode === 'DEMO' ? 'bg-purple-600/90 text-white shadow-sm shadow-purple-500/30 border border-purple-400/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
         }`}
         title="Inspect deterministic seeded Bangalore corridor dataset"
       >
         <i className="fa-solid fa-film text-[10px]"></i>
-        DEMO MODE
+        DEMO
       </button>
       <button
         onClick={() => setMode('OFFLINE')}
-        className={`px-2.5 py-1 rounded font-medium transition flex items-center gap-1.5 ${
-          mode === 'OFFLINE' ? 'bg-amber-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'
+        className={`px-3 py-1 rounded-lg font-bold transition flex items-center gap-1.5 ${
+          mode === 'OFFLINE' ? 'bg-amber-600/90 text-white shadow-sm shadow-amber-500/30 border border-amber-400/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
         }`}
         title="Simulate cellular loss and SQLite queue buffering"
       >
@@ -209,87 +211,67 @@ export default function App() {
     </div>
   );
 
+  // Tab Header Bar shared across views
+  const renderTabBar = () => (
+    <div className="bg-[#0e1321]/90 backdrop-blur-md border-b border-slate-800/80 px-6 flex items-center justify-between shrink-0">
+      <div className="flex gap-1 overflow-x-auto py-1.5 scrollbar-none">
+        {tabs.map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-3.5 py-2 text-xs font-semibold flex items-center gap-2 rounded-lg transition-all whitespace-nowrap ${
+              activeTab === tab.id
+                ? 'bg-cyan-500/10 text-cyan-300 border border-cyan-500/40 shadow-sm shadow-cyan-500/10'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent'
+            }`}
+          >
+            <i className={`fa-solid ${tab.icon} text-[11px]`}></i>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-3">
+        {renderModeToggle()}
+        <RoleSwitcher />
+        <span className={`inline-flex items-center gap-1.5 text-[11px] font-mono font-bold px-3 py-1 rounded-lg border ${
+          mode === 'LIVE'
+            ? (isLiveBackend ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-300' : 'bg-rose-950/80 border-rose-500/40 text-rose-300')
+            : (mode === 'DEMO' ? 'bg-purple-950/80 border-purple-500/40 text-purple-300' : 'bg-amber-950/80 border-amber-500/40 text-amber-300')
+        }`}>
+          <span className={`w-2 h-2 rounded-full ${mode === 'LIVE' && isLiveBackend ? 'bg-emerald-400 animate-pulse' : (mode === 'LIVE' ? 'bg-rose-400' : 'bg-purple-400')}`}></span>
+          {mode === 'LIVE'
+            ? (isLiveBackend ? `LIVE DATABASE (${activeIssues.length} HOTSPOTS)` : 'BACKEND OFFLINE')
+            : (mode === 'DEMO' ? `DEMO DATASET (${activeIssues.length} HOTSPOTS)` : 'OFFLINE BUFFER')}
+        </span>
+      </div>
+    </div>
+  );
+
   // Command Dashboard is a full-page view
   if (activeTab === 'command') {
     return (
-      <div className="min-h-screen bg-gray-950 flex flex-col">
-        {/* Top bar with tab navigation and live status */}
-        <div className="bg-gray-900 border-b border-gray-800 px-6 flex items-center justify-between">
-          <div className="flex gap-1 overflow-x-auto py-1">
-            {tabs.map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`px-4 py-2.5 text-xs font-medium flex items-center gap-2 border-b-2 transition-all ${
-                  activeTab === tab.id
-                    ? 'border-blue-500 text-blue-400 bg-blue-500/5'
-                    : 'border-transparent text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
-                }`}
-              >
-                <i className={`fa-solid ${tab.icon} text-[10px]`}></i>
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-3">
-            {renderModeToggle()}
-            <RoleSwitcher />
-            <span className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full border ${
-              mode === 'LIVE'
-                ? (isLiveBackend ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-400' : 'bg-red-950/80 border-red-500/50 text-red-400')
-                : (mode === 'DEMO' ? 'bg-purple-950/80 border-purple-500/50 text-purple-400' : 'bg-amber-950/80 border-amber-500/50 text-amber-400')
-            }`}>
-              <span className={`w-2 h-2 rounded-full ${mode === 'LIVE' && isLiveBackend ? 'bg-emerald-400 animate-pulse' : (mode === 'LIVE' ? 'bg-red-400' : 'bg-purple-400')}`}></span>
-              {mode === 'LIVE'
-                ? (isLiveBackend ? `LIVE DATABASE SYNC (${activeIssues.length} Issues)` : 'BACKEND OFFLINE')
-                : (mode === 'DEMO' ? `DEMO DATASET (${activeIssues.length} Issues)` : 'OFFLINE BUFFERING')}
-            </span>
-          </div>
-        </div>
+      <div className="h-screen bg-[#0a0f1d] flex flex-col overflow-hidden">
+        {renderTabBar()}
         {renderModeBanner()}
-        <CommandDashboard
-          issues={activeIssues}
-          buses={activeBuses}
-          isLive={mode === 'LIVE' && isLiveBackend}
-          onRefresh={fetchLiveBackendData}
-        />
+        <div className="flex-1 overflow-hidden">
+          <CommandDashboard
+            issues={activeIssues}
+            buses={activeBuses}
+            isLive={mode === 'LIVE' && isLiveBackend}
+            onRefresh={fetchLiveBackendData}
+          />
+        </div>
       </div>
     );
   }
 
-
   // GIS Intelligence Layer is a full-page view
   if (activeTab === 'gis') {
     return (
-      <div className="h-screen flex flex-col bg-gray-950">
-        {/* Top bar with tab navigation */}
-        <div className="bg-gray-900 border-b border-gray-800 px-6 flex items-center justify-between shrink-0">
-          <div className="flex gap-1 overflow-x-auto py-1">
-            {tabs.map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`px-4 py-2.5 text-xs font-medium flex items-center gap-2 border-b-2 transition-all ${
-                  activeTab === tab.id
-                    ? 'border-blue-500 text-blue-400 bg-blue-500/5'
-                    : 'border-transparent text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
-                }`}
-              >
-                <i className={`fa-solid ${tab.icon} text-[10px]`}></i>
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-3">
-            {renderModeToggle()}
-            <RoleSwitcher />
-            <span className="text-[11px] font-semibold text-emerald-400 bg-emerald-950/80 border border-emerald-500/40 px-2.5 py-1 rounded-full">
-              PostGIS Spatial View • {activeIssues.length} Hotspots
-            </span>
-          </div>
-        </div>
+      <div className="h-screen flex flex-col bg-[#0a0f1d] overflow-hidden">
+        {renderTabBar()}
         {renderModeBanner()}
-        <div className="flex-1">
+        <div className="flex-1 overflow-hidden">
           <GISIntelligenceLayer
             issues={activeIssues}
             buses={activeBuses}
@@ -309,34 +291,40 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
-      {/* Header */}
-      <header className="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center shadow-lg shadow-blue-500/20">
-            <i className="fa-solid fa-city text-white text-sm"></i>
+    <div className="min-h-screen bg-[#0a0f1d] text-[#dee2f6] flex flex-col font-sans">
+      {/* Top Main Header */}
+      <header className="bg-[#0e1321]/90 backdrop-blur-md border-b border-slate-800/80 px-6 py-3 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-3.5">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 via-teal-500 to-emerald-500 flex items-center justify-center shadow-lg shadow-cyan-500/20 ring-1 ring-cyan-400/40">
+            <i className="fa-solid fa-city text-white text-base"></i>
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white tracking-tight">UrbanPulse</h1>
-            <p className="text-[10px] text-gray-400 -mt-0.5">AI Mobile Urban Intelligence • SIH26124</p>
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg font-bold text-white tracking-tight">UrbanPulse</h1>
+              <span className="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 font-mono">
+                SIH26124
+              </span>
+            </div>
+            <p className="text-xs text-slate-400">Mobile Public Fleet Urban Intelligence Platform • Bharat Electronics Limited</p>
           </div>
         </div>
         <div className="flex items-center gap-4">
           {renderModeToggle()}
           <RoleSwitcher />
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-            <span>{activeBuses.filter(b => b.status === 'active').length} buses active</span>
+          <div className="flex items-center gap-2 text-xs text-slate-400 font-mono">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span className="text-slate-200 font-bold">{activeBuses.filter(b => b.status === 'active').length}</span>
+            <span>buses online</span>
           </div>
-          <div className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1.5 border ${
+          <div className={`px-3 py-1 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 border ${
             mode === 'LIVE'
-              ? (isLiveBackend ? 'bg-emerald-950/70 text-emerald-400 border-emerald-500/40' : 'bg-red-950/70 text-red-400 border-red-500/40')
-              : (mode === 'DEMO' ? 'bg-purple-950/70 text-purple-400 border-purple-500/40' : 'bg-amber-950/70 text-amber-400 border-amber-500/40')
+              ? (isLiveBackend ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40 glow-emerald' : 'bg-rose-950/80 text-rose-300 border-rose-500/40')
+              : (mode === 'DEMO' ? 'bg-purple-950/80 text-purple-300 border-purple-500/40' : 'bg-amber-950/80 text-amber-300 border-amber-500/40')
           }`}>
             <i className={`fa-solid ${mode === 'LIVE' && isLiveBackend ? 'fa-circle-check' : (mode === 'LIVE' ? 'fa-triangle-exclamation' : 'fa-film')}`}></i>
-            <span>{mode === 'LIVE' ? (isLiveBackend ? 'Backend Connected' : 'Backend Offline') : (mode === 'DEMO' ? 'Demo Mode' : 'Offline Mode')}</span>
+            <span>{mode === 'LIVE' ? (isLiveBackend ? 'PostGIS Active' : 'Backend Offline') : (mode === 'DEMO' ? 'Demo Dataset' : 'Offline Buffer')}</span>
           </div>
-          <div className="text-xs text-gray-500">
+          <div className="text-xs font-mono text-slate-500">
             BEL × SIH 2026
           </div>
         </div>
@@ -345,19 +333,19 @@ export default function App() {
       {/* Mode Alert Banner */}
       {renderModeBanner()}
 
-      {/* Tabs */}
-      <nav className="bg-gray-900/80 border-b border-gray-800 px-6 flex gap-1 shrink-0 overflow-x-auto">
+      {/* Tabs Navigation */}
+      <nav className="bg-[#0e1321]/80 backdrop-blur-md border-b border-slate-800/80 px-6 flex gap-1 shrink-0 overflow-x-auto py-1.5 scrollbar-none">
         {tabs.map(tab => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2 text-xs font-medium flex items-center gap-2 border-b-2 transition-all whitespace-nowrap ${
+            className={`px-3.5 py-2 text-xs font-semibold flex items-center gap-2 rounded-lg transition-all whitespace-nowrap ${
               activeTab === tab.id
-                ? 'border-blue-500 text-blue-400 bg-blue-500/5'
-                : 'border-transparent text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+                ? 'bg-cyan-500/10 text-cyan-300 border border-cyan-500/40 shadow-sm shadow-cyan-500/10'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent'
             }`}
           >
-            <i className={`fa-solid ${tab.icon} text-[10px]`}></i>
+            <i className={`fa-solid ${tab.icon} text-[11px]`}></i>
             {tab.label}
           </button>
         ))}
@@ -367,19 +355,19 @@ export default function App() {
       <StatsBar stats={{ ...dashboardStats, totalEvents: activeIssues.length, activeBuses: activeBuses.filter(b => b.status === 'active').length }} />
 
       {/* Main Content Area */}
-      <main className="flex-1 p-6 overflow-auto">
+      <main className="flex-1 p-6 overflow-auto bg-[#0a0f1d]">
         {activeTab === 'dashboard' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 space-y-6">
-              <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <div className="bg-[#0e1321]/80 backdrop-blur-md border border-slate-800 rounded-xl p-5 shadow-lg card-top-glow">
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-                    <i className="fa-solid fa-map-location-dot text-blue-400"></i>
-                    Live Infrastructure Hotspots
+                  <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                    <i className="fa-solid fa-map-location-dot text-cyan-400"></i>
+                    Live Infrastructure GIS Matrix
                   </h2>
-                  <span className="text-[10px] text-gray-400">Bengaluru Metropolitan Region</span>
+                  <span className="text-[11px] font-mono text-slate-400">Bengaluru Metropolitan Region • 3 Transit Corridors</span>
                 </div>
-                <div className="h-[420px] rounded-lg overflow-hidden border border-gray-800">
+                <div className="h-[420px] rounded-lg overflow-hidden border border-slate-800">
                   <MapView
                     events={activeIssues}
                     buses={activeBuses}
@@ -403,10 +391,6 @@ export default function App() {
 
         {activeTab === 'events' && (
           <div className="space-y-4">
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <i className="fa-solid fa-triangle-exclamation text-yellow-400"></i>
-              Verified Infrastructure Issues ({activeIssues.length})
-            </h2>
             <EventList
               events={activeIssues}
               selectedEventId={selectedEventId}
@@ -417,12 +401,12 @@ export default function App() {
 
         {activeTab === 'fleet' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 bg-gray-900 border border-gray-800 rounded-xl p-4">
-              <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                <i className="fa-solid fa-bus text-blue-400"></i>
-                Active Bus Positions
+            <div className="lg:col-span-2 bg-[#0e1321]/80 backdrop-blur-md border border-slate-800 rounded-xl p-5 shadow-lg card-top-glow">
+              <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+                <i className="fa-solid fa-bus text-cyan-400"></i>
+                Active Fleet Live Position Grid
               </h3>
-              <div className="h-[500px] rounded-lg overflow-hidden border border-gray-800">
+              <div className="h-[500px] rounded-lg overflow-hidden border border-slate-800">
                 <MapView
                   events={activeIssues}
                   buses={activeBuses}
@@ -455,4 +439,3 @@ export default function App() {
     </div>
   );
 }
-
