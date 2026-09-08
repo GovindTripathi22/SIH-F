@@ -8,16 +8,57 @@ import ArchitectureView from './components/ArchitectureView';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { CVDemo } from './components/CVDemo';
 import TemporalValidationDemo from './components/TemporalValidationDemo';
+import CommandDashboard from './components/CommandDashboard';
+import GISIntelligenceLayer from './components/GISIntelligenceLayer';
+import { EvidencePanel } from './components/EvidencePanel';
 import { simulatedEvents, simulatedBuses, dashboardStats } from './data';
+import { RoadEvent, Route } from './types';
 
-type Tab = 'dashboard' | 'events' | 'fleet' | 'pipeline' | 'analytics' | 'architecture' | 'cv-demo' | 'temporal';
+type Tab = 'command' | 'gis' | 'dashboard' | 'events' | 'fleet' | 'pipeline' | 'cv-demo' | 'temporal' | 'analytics' | 'architecture';
+
+// Sample routes for demonstration
+const sampleRoutes: Route[] = [
+  {
+    id: 'route-1',
+    number: '201-C',
+    name: 'Koramangala → Indiranagar',
+    startLocation: { lat: 12.9352, lng: 77.6245 },
+    endLocation: { lat: 12.9719, lng: 77.6412 },
+    distanceKm: 8.5,
+    estimatedDurationMinutes: 25,
+    isActive: true,
+  },
+  {
+    id: 'route-2',
+    number: '500-D',
+    name: 'Majestic → Whitefield',
+    startLocation: { lat: 12.9716, lng: 77.5946 },
+    endLocation: { lat: 12.9698, lng: 77.7499 },
+    distanceKm: 22.0,
+    estimatedDurationMinutes: 55,
+    isActive: true,
+  },
+  {
+    id: 'route-3',
+    number: '335-A',
+    name: 'Yelahanka → Electronic City',
+    startLocation: { lat: 13.1007, lng: 77.5963 },
+    endLocation: { lat: 12.8456, lng: 77.6603 },
+    distanceKm: 45.0,
+    estimatedDurationMinutes: 90,
+    isActive: true,
+  },
+];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('dashboard');
+  const [activeTab, setActiveTab] = useState<Tab>('command');
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [selectedIssue, setSelectedIssue] = useState<RoadEvent | null>(null);
 
   const tabs: { id: Tab; label: string; icon: string }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: 'fa-gauge-high' },
+    { id: 'command', label: 'Command', icon: 'fa-tower-broadcast' },
+    { id: 'gis', label: 'GIS Map', icon: 'fa-map-location-dot' },
+    { id: 'dashboard', label: 'Overview', icon: 'fa-gauge-high' },
     { id: 'events', label: 'Events', icon: 'fa-triangle-exclamation' },
     { id: 'fleet', label: 'Fleet', icon: 'fa-bus' },
     { id: 'pipeline', label: 'Pipeline', icon: 'fa-diagram-project' },
@@ -26,6 +67,71 @@ export default function App() {
     { id: 'analytics', label: 'Analytics', icon: 'fa-chart-line' },
     { id: 'architecture', label: 'Architecture', icon: 'fa-sitemap' },
   ];
+
+  // Command Dashboard is a full-page view
+  if (activeTab === 'command') {
+    return (
+      <div className="min-h-screen bg-gray-950">
+        {/* Top bar with tab navigation */}
+        <div className="bg-gray-900 border-b border-gray-800 px-6 flex gap-1">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-4 py-2.5 text-xs font-medium flex items-center gap-2 border-b-2 transition-all ${
+                activeTab === tab.id
+                  ? 'border-blue-500 text-blue-400 bg-blue-500/5'
+                  : 'border-transparent text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+              }`}
+            >
+              <i className={`fa-solid ${tab.icon} text-[10px]`}></i>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <CommandDashboard />
+      </div>
+    );
+  }
+
+  // GIS Intelligence Layer is a full-page view
+  if (activeTab === 'gis') {
+    return (
+      <div className="h-screen flex flex-col bg-gray-950">
+        {/* Top bar with tab navigation */}
+        <div className="bg-gray-900 border-b border-gray-800 px-6 flex gap-1 shrink-0">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-4 py-2.5 text-xs font-medium flex items-center gap-2 border-b-2 transition-all ${
+                activeTab === tab.id
+                  ? 'border-blue-500 text-blue-400 bg-blue-500/5'
+                  : 'border-transparent text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+              }`}
+            >
+              <i className={`fa-solid ${tab.icon} text-[10px]`}></i>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex-1">
+          <GISIntelligenceLayer
+            issues={simulatedEvents}
+            buses={simulatedBuses}
+            routes={sampleRoutes}
+            onIssueSelect={setSelectedIssue}
+          />
+        </div>
+        {selectedIssue && (
+          <EvidencePanel
+            issue={selectedIssue}
+            onClose={() => setSelectedIssue(null)}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
@@ -69,8 +175,8 @@ export default function App() {
         ))}
       </nav>
 
-      {/* Stats Bar (hidden on CV Demo tab) */}
-      {activeTab !== 'cv-demo' && <StatsBar stats={dashboardStats} />}
+      {/* Stats Bar (hidden on some tabs) */}
+      {!['cv-demo', 'temporal'].includes(activeTab) && <StatsBar stats={dashboardStats} />}
 
       {/* Main Content */}
       <main className="flex-1 overflow-hidden">

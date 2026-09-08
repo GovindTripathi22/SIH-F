@@ -99,6 +99,17 @@ export interface Bus {
   firmwareVersion?: string;
 }
 
+export interface Route {
+  id: string;
+  number: string;
+  name: string;
+  startLocation: GeoLocation;
+  endLocation: GeoLocation;
+  distanceKm?: number;
+  estimatedDurationMinutes?: number;
+  isActive: boolean;
+}
+
 // ---------- Pipeline ----------
 
 export interface PipelineStage {
