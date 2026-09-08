@@ -366,6 +366,80 @@ class APIClient {
     }
     return res.json();
   }
+
+  /**
+   * Fetch consolidated live database analytics KPIs
+   */
+  async getAnalyticsOverview(): Promise<{ overview: AnalyticsOverview; source: 'database' | 'offline_fallback' }> {
+    try {
+      const res = await fetch('/api/v1/analytics/overview', {
+        headers: this.getHeaders(),
+        signal: AbortSignal.timeout(4000)
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: AnalyticsOverview = await res.json();
+      this.isOnline = true;
+      return { overview: data, source: 'database' };
+    } catch (err) {
+      console.warn('Analytics API unavailable, compiling fallback metrics:', err);
+      const totalIssues = simulatedEvents.length;
+      const multiPass = simulatedEvents.filter(e => e.observations.length >= 2).length;
+      const totalObs = simulatedEvents.reduce((s, e) => s + e.observations.length, 0);
+      const allConf = simulatedEvents.flatMap(e => e.observations).map(o => Math.round(o.confidence * 100));
+      const avgConf = allConf.length > 0 ? Math.round(allConf.reduce((a, b) => a + b, 0) / allConf.length) : 85;
+      const verifiedCount = simulatedEvents.filter(e => e.status === 'verified' || e.status === 'actioned').length;
+      const verRate = Math.round((verifiedCount / totalIssues) * 100);
+
+      const typeDist = simulatedEvents.reduce((acc, e) => {
+        const k = e.type.replace(/_/g, ' ');
+        acc[k] = (acc[k] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
+
+      const fallbackOverview: AnalyticsOverview = {
+        total_events: totalObs,
+        total_issues: totalIssues,
+        multi_pass_events: multiPass,
+        total_observations: totalObs,
+        avg_confidence: avgConf,
+        verification_rate: verRate,
+        type_data: Object.entries(typeDist).map(([name, value]) => ({ name, value })),
+        status_data: [
+          { name: 'Unverified', value: simulatedEvents.filter(e => e.status === 'unverified').length, color: '#6b7280' },
+          { name: 'Pending', value: simulatedEvents.filter(e => e.status === 'pending_verify').length, color: '#eab308' },
+          { name: 'Verified', value: simulatedEvents.filter(e => e.status === 'verified').length, color: '#3b82f6' },
+          { name: 'Actioned', value: simulatedEvents.filter(e => e.status === 'actioned').length, color: '#22c55e' },
+          { name: 'Resolved', value: 0, color: '#10b981' },
+        ],
+        priority_data: [
+          { name: 'Critical', count: simulatedEvents.filter(e => e.priority === 'critical').length, color: '#ef4444' },
+          { name: 'High', count: simulatedEvents.filter(e => e.priority === 'high').length, color: '#f97316' },
+          { name: 'Medium', count: simulatedEvents.filter(e => e.priority === 'medium').length, color: '#eab308' },
+          { name: 'Low', count: simulatedEvents.filter(e => e.priority === 'low').length, color: '#6b7280' },
+        ],
+        hourly_data: Array.from({ length: 24 }, (_, i) => ({
+          hour: `${i}:00`,
+          detections: Math.round((i >= 6 && i <= 22 ? 15 + Math.sin((i - 6) * 0.5) * 12 : 3) + (i >= 8 && i <= 10 ? 10 : 0)),
+          verified: Math.round((i >= 6 && i <= 22 ? 8 + Math.sin((i - 6) * 0.5) * 6 : 1) + (i >= 8 && i <= 10 ? 5 : 0)),
+        }))
+      };
+
+      return { overview: fallbackOverview, source: 'offline_fallback' };
+    }
+  }
+}
+
+export interface AnalyticsOverview {
+  total_events: number;
+  total_issues: number;
+  multi_pass_events: number;
+  total_observations: number;
+  avg_confidence: number;
+  verification_rate: number;
+  type_data: Array<{ name: string; value: number }>;
+  status_data: Array<{ name: string; value: number; color: string }>;
+  priority_data: Array<{ name: string; count: number; color: string }>;
+  hourly_data: Array<{ hour: string; detections: number; verified: number }>;
 }
 
 export const apiClient = new APIClient();

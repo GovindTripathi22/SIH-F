@@ -46,6 +46,7 @@ class EventCreate(BaseModel):
     
     # Additional metadata
     frame_reference: Optional[str] = Field(None, max_length=65536, description="Reference to video frame")
+    metadata_json: Optional[str] = Field(None, max_length=10000, description="Optional metadata or heading JSON")
     
     @field_validator('event_id')
     @classmethod
@@ -77,6 +78,7 @@ class EventResponse(BaseModel):
     gps_accuracy_meters: Optional[float]
     processed: bool
     frame_reference: Optional[str]
+    metadata_json: Optional[str] = None
     created_at: datetime
     
     model_config = ConfigDict(from_attributes=True)

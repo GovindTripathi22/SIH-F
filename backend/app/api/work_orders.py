@@ -77,3 +77,39 @@ async def update_lifecycle(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+class CleanPassRequest(BaseModel):
+    bus_id: str
+    timestamp: Optional[str] = None
+
+
+@router.post("/work-orders/{issue_id}/clean-pass")
+async def record_clean_pass_endpoint(
+    issue_id: str,
+    req: CleanPassRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Record an automated clean fleet transit pass over a repaired infrastructure coordinate.
+    When 2 consecutive clean passes report zero defect recurrence, auto-promotes to RESOLUTION_VERIFIED.
+    """
+    try:
+        service = WorkOrderService(db)
+        updated_issue, is_auto_verified = await service.record_clean_pass(
+            issue_id=issue_id,
+            bus_id=req.bus_id
+        )
+        return {
+            "success": True,
+            "issue_id": updated_issue.issue_id,
+            "status": updated_issue.status,
+            "verification_state": updated_issue.verification_state,
+            "is_resolution_verified": is_auto_verified,
+            "message": "Resolution verified by consecutive clean passes" if is_auto_verified else f"Clean pass recorded for Bus {req.bus_id}"
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+

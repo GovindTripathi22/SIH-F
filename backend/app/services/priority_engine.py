@@ -6,7 +6,7 @@ All thresholds are configurable and scoring logic is transparent.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 from enum import Enum
 import logging
@@ -149,7 +149,14 @@ class PriorityEngine:
         Returns:
             PriorityResult with score, level, and human-readable reasons
         """
-        current_time = current_time or datetime.utcnow()
+        current_time = current_time or datetime.now(timezone.utc)
+        if current_time.tzinfo is None:
+            current_time = current_time.replace(tzinfo=timezone.utc)
+        if first_observed.tzinfo is None:
+            first_observed = first_observed.replace(tzinfo=timezone.utc)
+        if last_observed.tzinfo is None:
+            last_observed = last_observed.replace(tzinfo=timezone.utc)
+
         reasons = []
         factors = {}
         score = 0.0

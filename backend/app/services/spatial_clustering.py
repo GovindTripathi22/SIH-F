@@ -14,37 +14,54 @@ import uuid
 from app.models.event import RawEvent, EventObservation
 from app.models.issue import VerifiedIssue, IssueStatusHistory
 from app.models.spatial import haversine_distance_meters
+from app.services.priority_engine import PriorityEngine, SeverityClass, PriorityLevel
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
+def angle_delta(a1: Optional[float], a2: Optional[float]) -> float:
+    """Calculate minimum angular difference between two compass headings in degrees."""
+    if a1 is None or a2 is None:
+        return 0.0
+    diff = abs(a1 - a2) % 360.0
+    return 360.0 - diff if diff > 180.0 else diff
+
+
 class MultiPassVerificationEngine:
     """
     Core engine that merges multiple bus observations into unified verified issues
-    using spatial proximity, temporal windows, and bus fleet diversity.
+    using spatial proximity, temporal windows, heading consistency, and bus fleet diversity.
     """
 
     def __init__(self, db: AsyncSession):
         self.db = db
         self.radius_meters = settings.SPATIAL_CLUSTER_RADIUS_METERS
         self.window_minutes = settings.TEMPORAL_CLUSTER_WINDOW_MINUTES
+        self.priority_engine = PriorityEngine()
 
     async def find_matching_issue(
         self,
         event_type: str,
         latitude: float,
         longitude: float,
-        event_timestamp: datetime
+        event_timestamp: datetime,
+        heading: Optional[float] = None,
+        gps_accuracy_meters: Optional[float] = None
     ) -> Optional[VerifiedIssue]:
         """
-        Find an existing active issue within spatial radius and temporal window.
-        Uses bounding box filtering for high performance followed by exact haversine distance.
+        Find an existing active issue within spatial radius, temporal window, and consistent heading.
+        Dynamic search radius accounts for GPS accuracy and prevents opposite-carriageway false merging.
         """
+        # Dynamic search radius bounded between 10m and 25m based on GPS accuracy
+        effective_radius = self.radius_meters
+        if gps_accuracy_meters is not None and gps_accuracy_meters > 0:
+            effective_radius = max(10.0, min(25.0, gps_accuracy_meters * 2.0))
+
         # Convert radius to approximate coordinate degrees
         # 1 deg lat ~ 111,320m
-        deg_lat = self.radius_meters / 111320.0
-        deg_lon = self.radius_meters / (111320.0 * max(0.1, abs(latitude) / 90.0))
+        deg_lat = effective_radius / 111320.0
+        deg_lon = effective_radius / (111320.0 * max(0.1, abs(latitude) / 90.0))
 
         # We look for non-resolved issues (or issues within active consideration)
         query = select(VerifiedIssue).where(
@@ -61,12 +78,26 @@ class MultiPassVerificationEngine:
         min_distance = float('inf')
 
         for issue in candidate_issues:
+            # Check heading consistency to prevent false merging of opposite carriageways
+            issue_meta = {}
+            if issue.metadata_json:
+                try:
+                    issue_meta = json.loads(issue.metadata_json)
+                except Exception:
+                    pass
+
+            issue_heading = issue_meta.get("heading")
+            if heading is not None and issue_heading is not None:
+                delta = angle_delta(heading, issue_heading)
+                if delta > 120.0:
+                    # Bus traveling in opposite direction on divided carriageway -> do not false-merge
+                    continue
+
             dist = haversine_distance_meters(
                 latitude, longitude,
                 issue.centroid_latitude, issue.centroid_longitude
             )
-            if dist <= self.radius_meters and dist < min_distance:
-                # Check temporal window if needed (or historical persistence)
+            if dist <= effective_radius and dist < min_distance:
                 min_distance = dist
                 best_match = issue
 
@@ -77,11 +108,21 @@ class MultiPassVerificationEngine:
         Process a new raw detection event through the multi-pass verification pipeline.
         Returns (verified_issue, is_new_issue).
         """
+        heading = None
+        if raw_event.metadata_json:
+            try:
+                meta = json.loads(raw_event.metadata_json)
+                heading = meta.get("heading")
+            except Exception:
+                pass
+
         matching_issue = await self.find_matching_issue(
             raw_event.event_type,
             raw_event.latitude,
             raw_event.longitude,
-            raw_event.timestamp
+            raw_event.timestamp,
+            heading=heading,
+            gps_accuracy_meters=raw_event.gps_accuracy_meters
         )
 
         if matching_issue is not None:
@@ -96,35 +137,54 @@ class MultiPassVerificationEngine:
     async def _create_candidate_issue(self, event: RawEvent) -> VerifiedIssue:
         """Create a new candidate issue from the first observation."""
         issue_id = f"issue-{uuid.uuid4().hex[:8]}"
-        severity = self._map_confidence_to_severity(event.event_type, event.confidence)
-        initial_priority_score = event.confidence * 60.0
-        priority_level = "HIGH" if initial_priority_score > 70 else ("MEDIUM" if initial_priority_score > 40 else "LOW")
+        severity_str = self._map_confidence_to_severity(event.event_type, event.confidence)
+        sev_enum = SeverityClass[severity_str] if severity_str in SeverityClass.__members__ else SeverityClass.MODERATE
+
+        priority_res = self.priority_engine.calculate_priority(
+            event_type=event.event_type,
+            confidence=event.confidence,
+            observation_count=1,
+            distinct_bus_count=1,
+            first_observed=event.timestamp,
+            last_observed=event.timestamp,
+            severity=sev_enum
+        )
+
+        meta_dict = {"clean_passes": []}
+        if event.metadata_json:
+            try:
+                parsed = json.loads(event.metadata_json)
+                if "heading" in parsed:
+                    meta_dict["heading"] = parsed["heading"]
+            except Exception:
+                pass
 
         reasons = [
             f"Initial detection by Bus {event.bus_id} on route {event.route_id}",
             f"Detection confidence: {round(event.confidence * 100, 1)}%",
             f"Temporal validation score: {round(event.validation_score * 100, 1)}%",
             "State: CANDIDATE (Awaiting multi-pass confirmation)"
-        ]
+        ] + priority_res.reasons[:2]
 
         issue = VerifiedIssue(
             issue_id=issue_id,
             centroid_latitude=event.latitude,
             centroid_longitude=event.longitude,
             event_type=event.event_type,
-            severity=severity,
-            priority=priority_level,
+            severity=severity_str,
+            priority=priority_res.priority.value,
             status="PENDING",
             verification_state="CANDIDATE",
             observation_count=1,
             distinct_bus_count=1,
             confidence=event.confidence,
             verification_score=event.validation_score * 0.5,
-            priority_score=round(initial_priority_score, 1),
+            priority_score=priority_res.priority_score,
             first_observed=event.timestamp,
             last_observed=event.timestamp,
             cluster_radius_meters=self.radius_meters,
-            priority_reasons=json.dumps(reasons)
+            priority_reasons=json.dumps(reasons),
+            metadata_json=json.dumps(meta_dict)
         )
         self.db.add(issue)
         await self.db.flush()
@@ -178,23 +238,19 @@ class MultiPassVerificationEngine:
         v_score = 0.40 * bus_diversity_factor + 0.30 * volume_factor + 0.30 * issue.confidence
         issue.verification_score = round(v_score, 3)
 
-        # Explainable priority escalation
-        p_score = (
-            issue.confidence * 30.0 +
-            bus_diversity_factor * 35.0 +
-            volume_factor * 20.0 +
-            (15.0 if issue.severity == "SAFETY_HAZARD" else 8.0)
+        # Explainable priority calculation
+        sev_enum = SeverityClass[issue.severity] if issue.severity in SeverityClass.__members__ else SeverityClass.MODERATE
+        priority_res = self.priority_engine.calculate_priority(
+            event_type=issue.event_type,
+            confidence=issue.confidence,
+            observation_count=issue.observation_count,
+            distinct_bus_count=distinct_buses,
+            first_observed=issue.first_observed,
+            last_observed=issue.last_observed,
+            severity=sev_enum
         )
-        issue.priority_score = min(100.0, round(p_score, 1))
-
-        if issue.priority_score >= 80.0:
-            issue.priority = "CRITICAL"
-        elif issue.priority_score >= 60.0:
-            issue.priority = "HIGH"
-        elif issue.priority_score >= 40.0:
-            issue.priority = "MEDIUM"
-        else:
-            issue.priority = "LOW"
+        issue.priority = priority_res.priority.value
+        issue.priority_score = priority_res.priority_score
 
         # Verification state & repair failure detection
         is_repair_failure = (issue.status == "REPAIRED")
@@ -220,7 +276,7 @@ class MultiPassVerificationEngine:
             f"Multi-pass confidence score: {round(issue.confidence * 100, 1)}%",
             f"Verification consensus: {round(issue.verification_score * 100, 1)}%",
             f"State: {state_label}"
-        ]
+        ] + priority_res.reasons[:2]
         if is_repair_failure:
             reasons.insert(0, f"CRITICAL ALERT: Repair failed! Defect re-detected by Bus {event.bus_id} at coordinate ({event.latitude:.5f}, {event.longitude:.5f})")
 

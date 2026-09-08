@@ -22,3 +22,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Heavy Model Weights (keep lightweight rdd_yolov8n.pt)
+weights/
+models/sabiq_yolo.pt
+

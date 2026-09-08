@@ -1,0 +1,14 @@
+# UrbanPulse — Road Damage Dataset Configuration (RDD2022 Benchmark)
+path: ../datasets
+train: images/train
+val: images/val
+test: images/test
+
+# Classes trained on RDD2022 Road Damage Benchmark
+nc: 5
+names:
+  0: POTHOLE
+  1: CRACK
+  2: PATCH
+  3: MANHOLE
+  4: DRAINAGE

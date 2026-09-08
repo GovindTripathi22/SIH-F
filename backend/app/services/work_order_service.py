@@ -8,7 +8,7 @@ import os
 import csv
 import json
 from datetime import datetime, timezone
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from reportlab.lib.pagesizes import letter
@@ -234,3 +234,69 @@ class WorkOrderService:
         await self.db.refresh(issue)
 
         return issue
+
+    async def record_clean_pass(
+        self,
+        issue_id: str,
+        bus_id: str,
+        timestamp: Optional[datetime] = None
+    ) -> Tuple[VerifiedIssue, bool]:
+        """
+        Record an automated clean fleet inspection pass over a previously repaired defect coordinate.
+        When 2 consecutive clean passes by independent or scheduled buses report ZERO distress,
+        the issue is automatically promoted from REPAIRED to RESOLUTION_VERIFIED.
+
+        Returns: (issue, is_auto_verified)
+        """
+        query = select(VerifiedIssue).where(VerifiedIssue.issue_id == issue_id)
+        result = await self.db.execute(query)
+        issue = result.scalar_one_or_none()
+        if not issue:
+            raise ValueError(f"Issue {issue_id} not found")
+
+        if issue.status != "REPAIRED":
+            # Clean passes only track validation for REPAIRED infrastructure
+            return issue, False
+
+        ts_str = (timestamp or datetime.now(timezone.utc)).isoformat()
+        
+        # Load or initialize metadata
+        meta = {}
+        if issue.metadata_json:
+            try:
+                meta = json.loads(issue.metadata_json)
+            except Exception:
+                meta = {}
+
+        clean_passes = meta.get("clean_passes", [])
+        clean_passes.append({
+            "bus_id": bus_id,
+            "timestamp": ts_str,
+            "defect_observed": False
+        })
+        meta["clean_passes"] = clean_passes
+        meta["last_clean_pass"] = ts_str
+        issue.metadata_json = json.dumps(meta)
+
+        # Count clean passes post-repair
+        consecutive_clean = len(clean_passes)
+
+        # If >= 2 consecutive clean passes recorded, auto-certify resolution
+        if consecutive_clean >= 2:
+            unique_buses = len(set(p.get("bus_id") for p in clean_passes))
+            cert_notes = (
+                f"Automated Fleet Closed-Loop Verification: {consecutive_clean} consecutive clean bus passes "
+                f"across {unique_buses} fleet vehicle(s) recorded zero road distress at this coordinate. "
+                f"Durable municipal repair certified."
+            )
+            await self.advance_lifecycle(
+                issue_id=issue.issue_id,
+                target_status="RESOLUTION_VERIFIED",
+                actor=f"Automated Fleet Sensor (Bus {bus_id})",
+                notes=cert_notes
+            )
+            return issue, True
+        else:
+            issue.updated_at = datetime.now(timezone.utc)
+            await self.db.flush()
+            return issue, False
