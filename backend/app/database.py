@@ -1,17 +1,28 @@
 """
-Database connection and session management for PostgreSQL/PostGIS.
+Database connection and session management for PostgreSQL/PostGIS and SQLite.
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy import select, func, text
+from datetime import datetime, timezone
+import json
+import logging
+
 from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Engine configuration depending on dialect
+engine_kwargs = {"echo": settings.DEBUG}
+if "sqlite" not in settings.DATABASE_URL:
+    engine_kwargs["pool_size"] = settings.DATABASE_POOL_SIZE
+    engine_kwargs["max_overflow"] = settings.DATABASE_MAX_OVERFLOW
 
 # Create async engine
 engine = create_async_engine(
     settings.DATABASE_URL,
-    pool_size=settings.DATABASE_POOL_SIZE,
-    max_overflow=settings.DATABASE_MAX_OVERFLOW,
-    echo=settings.DEBUG
+    **engine_kwargs
 )
 
 # Create async session factory
@@ -27,12 +38,262 @@ class Base(DeclarativeBase):
     pass
 
 
+async def seed_initial_data():
+    """Seed initial buses, routes, and verified issues if tables are empty"""
+    from app.models.bus import Bus, Route
+    from app.models.issue import VerifiedIssue
+    from app.models.event import RawEvent, EventObservation
+
+    async with async_session() as session:
+        # Check if already seeded
+        res = await session.execute(select(func.count(Bus.bus_id)))
+        count = res.scalar()
+        if count and count > 0:
+            return  # Already populated
+
+        logger.info("Seeding initial fleet and infrastructure data into database...")
+
+        # Seed Routes
+        routes = [
+            Route(
+                route_id="route-1",
+                route_number="201-C",
+                route_name="Koramangala → Indiranagar",
+                start_latitude=12.9352,
+                start_longitude=77.6245,
+                end_latitude=12.9719,
+                end_longitude=77.6412,
+                distance_km=8.5,
+                estimated_duration_minutes=25,
+                is_active=True
+            ),
+            Route(
+                route_id="route-2",
+                route_number="500-D",
+                route_name="Majestic → Whitefield",
+                start_latitude=12.9716,
+                start_longitude=77.5946,
+                end_latitude=12.9698,
+                end_longitude=77.7499,
+                distance_km=22.0,
+                estimated_duration_minutes=55,
+                is_active=True
+            ),
+            Route(
+                route_id="route-3",
+                route_number="335-A",
+                route_name="Yelahanka → Electronic City",
+                start_latitude=13.1007,
+                start_longitude=77.5963,
+                end_latitude=12.8456,
+                end_longitude=77.6603,
+                distance_km=45.0,
+                estimated_duration_minutes=90,
+                is_active=True
+            ),
+        ]
+        session.add_all(routes)
+
+        # Seed Buses
+        now = datetime.now(timezone.utc)
+        buses = [
+            Bus(
+                bus_id="bus-01",
+                registration_number="KA-01-F-4521",
+                bus_type="Electric Volvo 9400",
+                capacity=45,
+                camera_id="cam-01-fwd",
+                camera_status="ONLINE",
+                current_route_id="route-1",
+                current_status="ACTIVE",
+                current_latitude=12.9385,
+                current_longitude=77.6280,
+                last_speed_kmh=32.4,
+                last_ping=now,
+                total_events_detected=14,
+                total_distance_km=142.5
+            ),
+            Bus(
+                bus_id="bus-02",
+                registration_number="KA-01-F-4522",
+                bus_type="Electric Volvo 9400",
+                capacity=45,
+                camera_id="cam-02-fwd",
+                camera_status="ONLINE",
+                current_route_id="route-1",
+                current_status="ACTIVE",
+                current_latitude=12.9510,
+                current_longitude=77.6320,
+                last_speed_kmh=28.1,
+                last_ping=now,
+                total_events_detected=19,
+                total_distance_km=165.2
+            ),
+            Bus(
+                bus_id="bus-03",
+                registration_number="KA-57-E-1102",
+                bus_type="Tata Starbus Ultra",
+                capacity=36,
+                camera_id="cam-03-fwd",
+                camera_status="ONLINE",
+                current_route_id="route-2",
+                current_status="ACTIVE",
+                current_latitude=12.9720,
+                current_longitude=77.6100,
+                last_speed_kmh=41.0,
+                last_ping=now,
+                total_events_detected=8,
+                total_distance_km=210.0
+            ),
+            Bus(
+                bus_id="bus-04",
+                registration_number="KA-57-E-1103",
+                bus_type="Tata Starbus Ultra",
+                capacity=36,
+                camera_id="cam-04-fwd",
+                camera_status="ONLINE",
+                current_route_id="route-2",
+                current_status="ACTIVE",
+                current_latitude=12.9705,
+                current_longitude=77.6800,
+                last_speed_kmh=35.5,
+                last_ping=now,
+                total_events_detected=11,
+                total_distance_km=188.4
+            ),
+            Bus(
+                bus_id="bus-05",
+                registration_number="KA-04-G-8821",
+                bus_type="Ashok Leyland JanBus",
+                capacity=50,
+                camera_id="cam-05-fwd",
+                camera_status="ONLINE",
+                current_route_id="route-3",
+                current_status="ACTIVE",
+                current_latitude=13.0100,
+                current_longitude=77.5980,
+                last_speed_kmh=38.0,
+                last_ping=now,
+                total_events_detected=22,
+                total_distance_km=305.1
+            ),
+        ]
+        session.add_all(buses)
+
+        # Seed Verified Issues with full multi-pass evidence
+        issues = [
+            VerifiedIssue(
+                issue_id="issue-001",
+                centroid_latitude=12.9342,
+                centroid_longitude=77.6101,
+                event_type="pothole",
+                severity="SAFETY_HAZARD",
+                priority="CRITICAL",
+                status="PENDING",
+                verification_state="VERIFIED",
+                observation_count=6,
+                distinct_bus_count=3,
+                confidence=0.96,
+                verification_score=0.94,
+                priority_score=94.5,
+                first_observed=now,
+                last_observed=now,
+                cluster_radius_meters=12.4,
+                priority_reasons=json.dumps([
+                    "Severe deep pothole on high-density 100ft Road",
+                    "Multiple independent fleet confirmations (Bus-01, Bus-02, Bus-04)",
+                    "High confidence CV detection: 96%",
+                    "Near heavy pedestrian junction (Silk Board corridor)"
+                ])
+            ),
+            VerifiedIssue(
+                issue_id="issue-002",
+                centroid_latitude=12.9752,
+                centroid_longitude=77.6067,
+                event_type="road_crack",
+                severity="SEVERE",
+                priority="HIGH",
+                status="IN_PROGRESS",
+                verification_state="ACTIONED",
+                observation_count=4,
+                distinct_bus_count=2,
+                confidence=0.88,
+                verification_score=0.85,
+                priority_score=82.0,
+                first_observed=now,
+                last_observed=now,
+                cluster_radius_meters=15.0,
+                priority_reasons=json.dumps([
+                    "Extensive longitudinal cracking on MG Road bridge approach",
+                    "Dual-bus persistence confirmed",
+                    "High traffic volume route"
+                ])
+            ),
+            VerifiedIssue(
+                issue_id="issue-003",
+                centroid_latitude=12.9784,
+                centroid_longitude=77.6408,
+                event_type="waterlogging",
+                severity="SAFETY_HAZARD",
+                priority="CRITICAL",
+                status="PENDING",
+                verification_state="VERIFIED",
+                observation_count=5,
+                distinct_bus_count=3,
+                confidence=0.92,
+                verification_score=0.91,
+                priority_score=91.0,
+                first_observed=now,
+                last_observed=now,
+                cluster_radius_meters=18.5,
+                priority_reasons=json.dumps([
+                    "Severe sub-surface drainage overflow near Indiranagar 12th Main",
+                    "Flooding spans entire left lane",
+                    "3 independent fleet units confirmed within 30 min"
+                ])
+            ),
+            VerifiedIssue(
+                issue_id="issue-004",
+                centroid_latitude=12.9298,
+                centroid_longitude=77.6844,
+                event_type="pothole",
+                severity="MODERATE",
+                priority="MEDIUM",
+                status="RESOLVED",
+                verification_state="RESOLUTION_VERIFIED",
+                observation_count=3,
+                distinct_bus_count=2,
+                confidence=0.84,
+                verification_score=0.82,
+                priority_score=68.0,
+                first_observed=now,
+                last_observed=now,
+                cluster_radius_meters=10.2,
+                resolved_at=now,
+                resolved_by="PWD_BBMP_TEAM_4",
+                resolution_notes="Cold-mix asphalt patching completed and verified by subsequent bus passes.",
+                priority_reasons=json.dumps([
+                    "Medium pothole on Bellandur service road",
+                    "Cold asphalt repair executed by BBMP Ward 150"
+                ])
+            ),
+        ]
+        session.add_all(issues)
+        await session.commit()
+        logger.info("Initial data seeded successfully.")
+
+
 async def init_db():
-    """Initialize database - create tables if they don't exist"""
+    """Initialize database - create tables if they don't exist, run migrations, and seed data"""
     async with engine.begin() as conn:
-        # Import models to ensure they're registered
         from app.models import event, issue, bus
         await conn.run_sync(Base.metadata.create_all)
+        # Automated migration for verification_state column if running on existing database
+        try:
+            await conn.execute(text("ALTER TABLE verified_issues ADD COLUMN verification_state VARCHAR(30) DEFAULT 'CANDIDATE'"))
+        except Exception:
+            pass
+    await seed_initial_data()
 
 
 async def close_db():

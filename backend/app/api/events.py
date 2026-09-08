@@ -17,12 +17,15 @@ from app.services.event_service import EventService
 
 logger = logging.getLogger(__name__)
 
+from app.core.security import get_event_ingestion_auth
+
 router = APIRouter()
 
 
 @router.post("/events", response_model=EventResponse, status_code=status.HTTP_201_CREATED)
 async def create_event(
     event: EventCreate,
+    auth: dict = Depends(get_event_ingestion_auth),
     db: AsyncSession = Depends(get_db)
 ):
     """

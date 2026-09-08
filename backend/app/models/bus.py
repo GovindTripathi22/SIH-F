@@ -4,8 +4,8 @@ Database models for buses and routes.
 
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text
 from sqlalchemy.sql import func
-from geoalchemy2 import Geography
 from app.database import Base
+from app.models.spatial import SpatialPoint
 
 
 class Bus(Base):
@@ -16,8 +16,8 @@ class Bus(Base):
     
     # Bus details
     registration_number = Column(String(50), nullable=False)
-    bus_type = Column(String(50))  # electric, diesel, hybrid
-    capacity = Column(Integer)
+    bus_type = Column(String(50), default='diesel')  # electric, diesel, hybrid
+    capacity = Column(Integer, default=50)
     
     # Camera information
     camera_id = Column(String(50), nullable=False)
@@ -28,11 +28,11 @@ class Bus(Base):
     current_status = Column(String(20), default='ACTIVE')  # ACTIVE, IDLE, MAINTENANCE
     current_latitude = Column(Float)
     current_longitude = Column(Float)
-    current_location = Column(Geography('POINT', srid=4326))
+    current_location = Column(SpatialPoint(), nullable=True)
     
     # Last update
     last_ping = Column(DateTime(timezone=True))
-    last_speed_kmh = Column(Float)
+    last_speed_kmh = Column(Float, default=0.0)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -54,8 +54,8 @@ class Route(Base):
     route_name = Column(String(200), nullable=False)
     
     # Route geometry (simplified as start/end points for now)
-    start_location = Column(Geography('POINT', srid=4326))
-    end_location = Column(Geography('POINT', srid=4326))
+    start_location = Column(SpatialPoint(), nullable=True)
+    end_location = Column(SpatialPoint(), nullable=True)
     start_latitude = Column(Float)
     start_longitude = Column(Float)
     end_latitude = Column(Float)
@@ -84,7 +84,7 @@ class BusTelemetry(Base):
     # Location
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
-    location = Column(Geography('POINT', srid=4326), nullable=False)
+    location = Column(SpatialPoint(), nullable=True)
     
     # Telemetry
     speed_kmh = Column(Float)

@@ -3,3 +3,22 @@ node_modules/
 dist/
 build/
 *.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment & OS
+.env
+.DS_Store
+Thumbs.db
+

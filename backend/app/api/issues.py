@@ -21,6 +21,7 @@ from app.schemas.issue import (
 )
 from app.schemas.common import PaginatedResponse
 from app.services.issue_service import IssueService
+from app.core.security import require_roles, Role
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,73 @@ async def get_issues(
         )
 
 
+from app.models.spatial import haversine_distance_meters
+
+@router.get("/issues/nearby", response_model=list[IssueResponse])
+async def get_nearby_issues(
+    latitude: float = Query(..., ge=-90, le=90, description="Latitude"),
+    longitude: float = Query(..., ge=-180, le=180, description="Longitude"),
+    radius_meters: float = Query(default=500, ge=0, le=10000, description="Radius in meters"),
+    limit: int = Query(default=20, ge=1, le=100, description="Maximum results"),
+    event_type: Optional[str] = Query(None, description="Filter by event type"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get issues near a specific location using spatial queries (PostGIS ST_DWithin or spatial bounding-box + Haversine).
+    """
+    try:
+        bind = db.get_bind()
+        dialect_name = bind.dialect.name if hasattr(bind, 'dialect') else 'sqlite'
+
+        if dialect_name == 'postgresql':
+            query = select(VerifiedIssue).where(
+                func.ST_DWithin(
+                    VerifiedIssue.location,
+                    func.ST_SetSRID(func.ST_MakePoint(longitude, latitude), 4326).cast('geography'),
+                    radius_meters
+                )
+            )
+            if event_type:
+                query = query.where(VerifiedIssue.event_type == event_type)
+            query = query.order_by(
+                func.ST_Distance(
+                    VerifiedIssue.location,
+                    func.ST_SetSRID(func.ST_MakePoint(longitude, latitude), 4326).cast('geography')
+                )
+            ).limit(limit)
+            result = await db.execute(query)
+            return result.scalars().all()
+        else:
+            # Fast Bounding-Box + Haversine filter on SQLite
+            deg_lat = radius_meters / 111320.0
+            deg_lon = radius_meters / (111320.0 * max(0.1, abs(latitude) / 90.0))
+
+            query = select(VerifiedIssue).where(
+                VerifiedIssue.centroid_latitude.between(latitude - deg_lat, latitude + deg_lat),
+                VerifiedIssue.centroid_longitude.between(longitude - deg_lon, longitude + deg_lon)
+            )
+            if event_type:
+                query = query.where(VerifiedIssue.event_type == event_type)
+
+            result = await db.execute(query)
+            candidates = result.scalars().all()
+
+            # Filter exact radius and sort by distance
+            filtered = []
+            for issue in candidates:
+                d = haversine_distance_meters(latitude, longitude, issue.centroid_latitude, issue.centroid_longitude)
+                if d <= radius_meters:
+                    filtered.append((d, issue))
+            filtered.sort(key=lambda x: x[0])
+            return [item[1] for item in filtered[:limit]]
+    except Exception as e:
+        logger.error(f"Error fetching nearby issues: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch nearby issues"
+        )
+
+
 @router.get("/issues/{issue_id}", response_model=IssueDetailResponse)
 async def get_issue(
     issue_id: str,
@@ -162,73 +230,30 @@ async def get_issue(
         )
 
 
-@router.get("/issues/nearby", response_model=list[IssueResponse])
-async def get_nearby_issues(
-    latitude: float = Query(..., ge=-90, le=90, description="Latitude"),
-    longitude: float = Query(..., ge=-180, le=180, description="Longitude"),
-    radius_meters: float = Query(default=500, ge=0, le=10000, description="Radius in meters"),
-    limit: int = Query(default=20, ge=1, le=100, description="Maximum results"),
-    event_type: Optional[str] = Query(None, description="Filter by event type"),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get issues near a specific location using PostGIS spatial queries.
-    """
-    try:
-        # Build spatial query using PostGIS
-        query = select(VerifiedIssue).where(
-            func.ST_DWithin(
-                VerifiedIssue.location,
-                func.ST_SetSRID(func.ST_MakePoint(longitude, latitude), 4326).cast('geography'),
-                radius_meters
-            )
-        )
-        
-        if event_type:
-            query = query.where(VerifiedIssue.event_type == event_type)
-        
-        # Order by distance
-        query = query.order_by(
-            func.ST_Distance(
-                VerifiedIssue.location,
-                func.ST_SetSRID(func.ST_MakePoint(longitude, latitude), 4326).cast('geography')
-            )
-        ).limit(limit)
-        
-        result = await db.execute(query)
-        issues = result.scalars().all()
-        
-        return issues
-    except Exception as e:
-        logger.error(f"Error fetching nearby issues: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch nearby issues"
-        )
-
-
 @router.patch("/issues/{issue_id}/status")
 async def update_issue_status(
     issue_id: str,
     status_update: IssueStatusUpdate,
+    current_user: dict = Depends(require_roles([Role.ADMIN, Role.PWD_ENGINEER, Role.FIELD_ENGINEER, Role.TRAFFIC_AUTHORITY])),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Update the status of an issue.
     
     Creates a status history entry and updates the issue.
+    Restricted to authorized municipal engineers and administrators.
     """
     try:
         issue_service = IssueService(db)
         updated_issue = await issue_service.update_status(
             issue_id=issue_id,
             new_status=status_update.status.value,
-            changed_by=status_update.changed_by,
+            changed_by=status_update.changed_by or current_user.get("username", "Engineer"),
             change_reason=status_update.change_reason,
             resolution_notes=status_update.resolution_notes
         )
         
-        logger.info(f"Issue {issue_id} status updated to {status_update.status.value}")
+        logger.info(f"Issue {issue_id} status updated to {status_update.status.value} by {current_user.get('username')}")
         
         return {
             "success": True,
@@ -247,6 +272,42 @@ async def update_issue_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update issue status"
         )
+
+
+@router.delete("/issues/{issue_id}", status_code=status.HTTP_200_OK)
+async def delete_issue(
+    issue_id: str,
+    current_user: dict = Depends(require_roles([Role.ADMIN])),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Administrative deletion of an issue and associated observation records.
+    Restricted to ADMIN role only.
+    """
+    try:
+        query = select(VerifiedIssue).where(VerifiedIssue.issue_id == issue_id)
+        result = await db.execute(query)
+        issue = result.scalar_one_or_none()
+        if not issue:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Issue {issue_id} not found")
+
+        from sqlalchemy import delete
+        await db.execute(delete(EventObservation).where(EventObservation.issue_id == issue_id))
+        await db.execute(delete(IssueStatusHistory).where(IssueStatusHistory.issue_id == issue_id))
+        await db.delete(issue)
+        await db.commit()
+
+        logger.info(f"Issue {issue_id} deleted by ADMIN {current_user['username']}")
+        return {
+            "success": True,
+            "message": f"Issue {issue_id} successfully purged by municipal administrator.",
+            "deleted_issue_id": issue_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting issue {issue_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 @router.get("/issues/stats/summary")

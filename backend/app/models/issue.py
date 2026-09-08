@@ -4,8 +4,8 @@ Database models for verified infrastructure issues.
 
 from sqlalchemy import Column, Integer, String, Float, DateTime, Text
 from sqlalchemy.sql import func
-from geoalchemy2 import Geography
 from app.database import Base
+from app.models.spatial import SpatialPoint
 
 
 class VerifiedIssue(Base):
@@ -16,19 +16,20 @@ class VerifiedIssue(Base):
     issue_id = Column(String(50), primary_key=True, index=True)
     
     # Location
-    location = Column(Geography('POINT', srid=4326), nullable=False, index=True)
-    centroid_latitude = Column(Float)
-    centroid_longitude = Column(Float)
+    location = Column(SpatialPoint(), nullable=True, index=True)
+    centroid_latitude = Column(Float, nullable=False, index=True)
+    centroid_longitude = Column(Float, nullable=False, index=True)
     
     # Event details
     event_type = Column(String(100), nullable=False, index=True)
     severity = Column(String(20), nullable=False, index=True)
     priority = Column(String(20), nullable=False, index=True)
     status = Column(String(20), nullable=False, default='PENDING', index=True)
+    verification_state = Column(String(30), nullable=False, default='CANDIDATE', index=True)
     
     # Evidence metrics
-    observation_count = Column(Integer, nullable=False)
-    distinct_bus_count = Column(Integer, nullable=False)
+    observation_count = Column(Integer, nullable=False, default=1)
+    distinct_bus_count = Column(Integer, nullable=False, default=1)
     confidence = Column(Float, nullable=False)
     verification_score = Column(Float, nullable=False)
     priority_score = Column(Float, nullable=False)
@@ -40,7 +41,7 @@ class VerifiedIssue(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Spatial clustering
-    cluster_radius_meters = Column(Float)
+    cluster_radius_meters = Column(Float, default=15.0)
     
     # Priority explanation
     priority_reasons = Column(Text)  # JSON string of reasons

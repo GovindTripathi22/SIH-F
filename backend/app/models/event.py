@@ -4,8 +4,8 @@ Database models for events.
 
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text
 from sqlalchemy.sql import func
-from geoalchemy2 import Geography
 from app.database import Base
+from app.models.spatial import SpatialPoint
 
 
 class RawEvent(Base):
@@ -18,7 +18,7 @@ class RawEvent(Base):
     # Location
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
-    location = Column(Geography('POINT', srid=4326), nullable=False)
+    location = Column(SpatialPoint(), nullable=True)
     
     # Timestamps
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)

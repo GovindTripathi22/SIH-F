@@ -1,15 +1,26 @@
 import { useState } from 'react';
 import { RoadEvent, Bus } from '../types';
 import { EvidencePanel } from './EvidencePanel';
+import { RoleSwitcher } from './RoleSwitcher';
 import { simulatedEvents, simulatedBuses } from '../data';
 
-export default function CommandDashboard() {
+interface CommandDashboardProps {
+  issues?: RoadEvent[];
+  buses?: Bus[];
+  isLive?: boolean;
+  onRefresh?: () => void;
+}
+
+export default function CommandDashboard({ issues: propIssues, buses: propBuses, isLive = true, onRefresh }: CommandDashboardProps = {}) {
   const [selectedIssue, setSelectedIssue] = useState<RoadEvent | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'issues' | 'fleet' | 'analytics'>('overview');
 
-  const criticalIssues = simulatedEvents.filter(e => e.priority === 'critical');
-  const highPriorityIssues = simulatedEvents.filter(e => e.priority === 'high');
-  const activeBuses = simulatedBuses.filter(b => b.status === 'active');
+  const issues = propIssues && propIssues.length > 0 ? propIssues : simulatedEvents;
+  const buses = propBuses && propBuses.length > 0 ? propBuses : simulatedBuses;
+
+  const criticalIssues = issues.filter(e => e.priority === 'critical');
+  const highPriorityIssues = issues.filter(e => e.priority === 'high');
+  const activeBuses = buses.filter(b => b.status === 'active');
 
   return (
     <div className="h-screen bg-gray-950 flex flex-col">
@@ -23,11 +34,29 @@ export default function CommandDashboard() {
               </div>
               <div>
                 <h1 className="text-xl font-bold text-white">UrbanPulse Command Center</h1>
-                <p className="text-xs text-gray-400">Real-time Urban Intelligence Platform</p>
+                <p className="text-xs text-gray-400">Real-time Urban Intelligence Platform • SIH26124</p>
               </div>
             </div>
           </div>
           <div className="flex items-center gap-4">
+            <RoleSwitcher />
+            <div className={`flex items-center gap-2 text-xs font-semibold px-2.5 py-1 rounded-md border ${
+              isLive
+                ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-400'
+                : 'bg-amber-950/60 border-amber-500/40 text-amber-400'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+              <span>{isLive ? 'POSTGIS LIVE BACKEND' : 'OFFLINE DEMO'}</span>
+            </div>
+            {onRefresh && (
+              <button
+                onClick={onRefresh}
+                title="Sync with Backend"
+                className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition"
+              >
+                <i className="fa-solid fa-rotate"></i>
+              </button>
+            )}
             <div className="flex items-center gap-2 text-sm">
               <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
               <span className="text-gray-300">{activeBuses.length} buses active</span>
@@ -76,12 +105,12 @@ export default function CommandDashboard() {
         )}
         {activeTab === 'issues' && (
           <IssuesTab
-            issues={simulatedEvents}
+            issues={issues}
             onIssueSelect={setSelectedIssue}
           />
         )}
         {activeTab === 'fleet' && (
-          <FleetTab buses={simulatedBuses} />
+          <FleetTab buses={buses} />
         )}
         {activeTab === 'analytics' && (
           <AnalyticsTab />

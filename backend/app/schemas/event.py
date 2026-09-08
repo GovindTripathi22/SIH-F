@@ -2,7 +2,7 @@
 Pydantic schemas for events.
 """
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -22,36 +22,43 @@ class EventType(str, Enum):
 
 class EventCreate(BaseModel):
     """Schema for creating a new event"""
-    event_id: str = Field(..., description="Unique event identifier")
+    event_id: str = Field(..., min_length=3, max_length=50, description="Unique event identifier")
     
     # Location
-    latitude: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
-    longitude: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
+    latitude: float = Field(..., ge=-90.0, le=90.0, description="Latitude coordinate")
+    longitude: float = Field(..., ge=-180.0, le=180.0, description="Longitude coordinate")
     
     # Timestamp
     timestamp: datetime = Field(..., description="Detection timestamp")
     
     # Source information
-    bus_id: str = Field(..., description="Bus identifier")
-    route_id: str = Field(..., description="Route identifier")
-    camera_id: str = Field(..., description="Camera identifier")
+    bus_id: str = Field(..., min_length=1, max_length=50, description="Bus identifier")
+    route_id: str = Field(..., min_length=1, max_length=50, description="Route identifier")
+    camera_id: str = Field(..., min_length=1, max_length=50, description="Camera identifier")
     
     # Detection details
     event_type: EventType = Field(..., description="Type of event detected")
-    confidence: float = Field(..., ge=0, le=1, description="Detection confidence (0-1)")
-    validation_score: float = Field(..., ge=0, le=1, description="Temporal validation score (0-1)")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Detection confidence (0-1)")
+    validation_score: float = Field(..., ge=0.0, le=1.0, description="Temporal validation score (0-1)")
     
     # GPS quality
-    gps_accuracy_meters: Optional[float] = Field(None, ge=0, description="GPS accuracy in meters")
+    gps_accuracy_meters: Optional[float] = Field(None, ge=0.0, le=500.0, description="GPS accuracy in meters")
     
     # Additional metadata
-    frame_reference: Optional[str] = Field(None, description="Reference to video frame")
+    frame_reference: Optional[str] = Field(None, max_length=65536, description="Reference to video frame")
     
-    @validator('event_id')
-    def validate_event_id(cls, v):
-        if not v or len(v) < 3:
+    @field_validator('event_id')
+    @classmethod
+    def validate_event_id(cls, v: str) -> str:
+        if not v or len(v.strip()) < 3:
             raise ValueError('event_id must be at least 3 characters')
-        return v
+        return v.strip()
+
+    @model_validator(mode='after')
+    def validate_coordinates(self):
+        if abs(self.latitude) < 0.0001 and abs(self.longitude) < 0.0001:
+            raise ValueError("Suspicious Null Island coordinate (0, 0) is rejected")
+        return self
 
 
 class EventResponse(BaseModel):
@@ -72,8 +79,7 @@ class EventResponse(BaseModel):
     frame_reference: Optional[str]
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class EventListResponse(BaseModel):

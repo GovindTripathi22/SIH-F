@@ -2,7 +2,7 @@
 Pydantic schemas for verified issues.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -44,6 +44,7 @@ class IssueResponse(BaseModel):
     severity: str
     priority: str
     status: str
+    verification_state: Optional[str] = "CANDIDATE"
     observation_count: int
     distinct_bus_count: int
     confidence: float
@@ -59,8 +60,7 @@ class IssueResponse(BaseModel):
     resolved_by: Optional[str]
     resolution_notes: Optional[str]
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class IssueDetailResponse(IssueResponse):
