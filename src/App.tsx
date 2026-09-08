@@ -7,9 +7,10 @@ import { StatsBar } from './components/StatsBar';
 import ArchitectureView from './components/ArchitectureView';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { CVDemo } from './components/CVDemo';
+import TemporalValidationDemo from './components/TemporalValidationDemo';
 import { simulatedEvents, simulatedBuses, dashboardStats } from './data';
 
-type Tab = 'dashboard' | 'events' | 'fleet' | 'pipeline' | 'analytics' | 'architecture' | 'cv-demo';
+type Tab = 'dashboard' | 'events' | 'fleet' | 'pipeline' | 'analytics' | 'architecture' | 'cv-demo' | 'temporal';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
@@ -21,6 +22,7 @@ export default function App() {
     { id: 'fleet', label: 'Fleet', icon: 'fa-bus' },
     { id: 'pipeline', label: 'Pipeline', icon: 'fa-diagram-project' },
     { id: 'cv-demo', label: 'CV Engine', icon: 'fa-video' },
+    { id: 'temporal', label: 'Temporal', icon: 'fa-clock-rotate-left' },
     { id: 'analytics', label: 'Analytics', icon: 'fa-chart-line' },
     { id: 'architecture', label: 'Architecture', icon: 'fa-sitemap' },
   ];
@@ -110,6 +112,11 @@ export default function App() {
         {activeTab === 'cv-demo' && (
           <div className="h-[calc(100vh-60px)] overflow-y-auto">
             <CVDemo />
+          </div>
+        )}
+        {activeTab === 'temporal' && (
+          <div className="h-[calc(100vh-60px)] overflow-y-auto">
+            <TemporalValidationDemo />
           </div>
         )}
         {activeTab === 'analytics' && (
