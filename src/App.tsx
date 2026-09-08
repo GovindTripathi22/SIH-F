@@ -6,9 +6,10 @@ import { PipelineView } from './components/PipelineView';
 import { StatsBar } from './components/StatsBar';
 import ArchitectureView from './components/ArchitectureView';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
+import { CVDemo } from './components/CVDemo';
 import { simulatedEvents, simulatedBuses, dashboardStats } from './data';
 
-type Tab = 'dashboard' | 'events' | 'fleet' | 'pipeline' | 'analytics' | 'architecture';
+type Tab = 'dashboard' | 'events' | 'fleet' | 'pipeline' | 'analytics' | 'architecture' | 'cv-demo';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
@@ -19,6 +20,7 @@ export default function App() {
     { id: 'events', label: 'Events', icon: 'fa-triangle-exclamation' },
     { id: 'fleet', label: 'Fleet', icon: 'fa-bus' },
     { id: 'pipeline', label: 'Pipeline', icon: 'fa-diagram-project' },
+    { id: 'cv-demo', label: 'CV Engine', icon: 'fa-video' },
     { id: 'analytics', label: 'Analytics', icon: 'fa-chart-line' },
     { id: 'architecture', label: 'Architecture', icon: 'fa-sitemap' },
   ];
@@ -65,8 +67,8 @@ export default function App() {
         ))}
       </nav>
 
-      {/* Stats Bar */}
-      <StatsBar stats={dashboardStats} />
+      {/* Stats Bar (hidden on CV Demo tab) */}
+      {activeTab !== 'cv-demo' && <StatsBar stats={dashboardStats} />}
 
       {/* Main Content */}
       <main className="flex-1 overflow-hidden">
@@ -105,6 +107,11 @@ export default function App() {
           </div>
         )}
         {activeTab === 'pipeline' && <PipelineView />}
+        {activeTab === 'cv-demo' && (
+          <div className="h-[calc(100vh-60px)] overflow-y-auto">
+            <CVDemo />
+          </div>
+        )}
         {activeTab === 'analytics' && (
           <div className="h-[calc(100vh-180px)] overflow-y-auto p-6">
             <AnalyticsPanel />
