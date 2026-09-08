@@ -11,10 +11,12 @@ import TemporalValidationDemo from './components/TemporalValidationDemo';
 import CommandDashboard from './components/CommandDashboard';
 import GISIntelligenceLayer from './components/GISIntelligenceLayer';
 import { EvidencePanel } from './components/EvidencePanel';
+import DemoMode from './components/DemoMode';
+import FailureScenarios from './components/FailureScenarios';
 import { simulatedEvents, simulatedBuses, dashboardStats } from './data';
 import { RoadEvent, Route } from './types';
 
-type Tab = 'command' | 'gis' | 'dashboard' | 'events' | 'fleet' | 'pipeline' | 'cv-demo' | 'temporal' | 'analytics' | 'architecture';
+type Tab = 'command' | 'gis' | 'dashboard' | 'events' | 'fleet' | 'pipeline' | 'cv-demo' | 'temporal' | 'demo' | 'failures' | 'analytics' | 'architecture';
 
 // Sample routes for demonstration
 const sampleRoutes: Route[] = [
@@ -58,6 +60,8 @@ export default function App() {
   const tabs: { id: Tab; label: string; icon: string }[] = [
     { id: 'command', label: 'Command', icon: 'fa-tower-broadcast' },
     { id: 'gis', label: 'GIS Map', icon: 'fa-map-location-dot' },
+    { id: 'demo', label: 'SIH Demo', icon: 'fa-play-circle' },
+    { id: 'failures', label: 'Failures', icon: 'fa-shield-halved' },
     { id: 'dashboard', label: 'Overview', icon: 'fa-gauge-high' },
     { id: 'events', label: 'Events', icon: 'fa-triangle-exclamation' },
     { id: 'fleet', label: 'Fleet', icon: 'fa-bus' },
@@ -223,6 +227,16 @@ export default function App() {
         {activeTab === 'temporal' && (
           <div className="h-[calc(100vh-60px)] overflow-y-auto">
             <TemporalValidationDemo />
+          </div>
+        )}
+        {activeTab === 'demo' && (
+          <div className="h-[calc(100vh-60px)] overflow-y-auto">
+            <DemoMode />
+          </div>
+        )}
+        {activeTab === 'failures' && (
+          <div className="h-[calc(100vh-60px)] overflow-y-auto">
+            <FailureScenarios />
           </div>
         )}
         {activeTab === 'analytics' && (
