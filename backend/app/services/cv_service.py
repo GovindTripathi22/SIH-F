@@ -65,14 +65,12 @@ class RoadDefectYOLOEngine:
             candidates = [
                 os.path.join(base_dir, "..", "..", "..", "models", "sabiq_yolo.pt"),
                 os.path.join(base_dir, "..", "..", "models", "sabiq_yolo.pt"),
-                os.path.join(base_dir, "..", "..", "sabiq_yolo.pt"),
                 "models/sabiq_yolo.pt",
                 "sabiq_yolo.pt",
-                os.path.join(base_dir, "..", "..", "rdd_yolov8n.pt"),
                 os.path.join(base_dir, "..", "..", "..", "models", "rdd_yolov8n.pt"),
-                os.path.join(base_dir, "..", "..", "yolov8n.pt"),
+                os.path.join(base_dir, "..", "..", "models", "rdd_yolov8n.pt"),
+                "models/rdd_yolov8n.pt",
                 "rdd_yolov8n.pt",
-                "yolov8n.pt"
             ]
             weights_path = "models/sabiq_yolo.pt"
             for c in candidates:

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import CommandDashboard from './components/CommandDashboard';
 import { FleetPanel } from './components/FleetPanel';
 import DemoMode from './components/DemoMode';
@@ -46,40 +46,51 @@ export default function App() {
     }
   }, []);
 
+  // Polling with tab visibility awareness (pauses when browser tab is inactive)
   useEffect(() => {
     if (mode === 'LIVE') {
       fetchLiveBackendData();
-      const interval = setInterval(fetchLiveBackendData, 6000);
+      const interval = setInterval(() => {
+        if (typeof document !== 'undefined' && !document.hidden) {
+          fetchLiveBackendData();
+        }
+      }, 6000);
       return () => clearInterval(interval);
     }
   }, [mode, fetchLiveBackendData]);
 
-  // Determine active issues and buses based on operational mode and selected city
-  const activeIssues: RoadEvent[] = mode === 'LIVE'
-    ? (isLiveBackend && liveIssues.length > 0
-        ? (() => {
-            const cityIssues = liveIssues.filter(issue => {
-              const dLat = Math.abs(issue.location.lat - currentCity.center.lat);
-              const dLng = Math.abs(issue.location.lng - currentCity.center.lng);
-              return dLat < 0.8 && dLng < 0.8;
-            });
-            return cityIssues.length > 0 ? cityIssues : currentCity.issues;
-          })()
-        : currentCity.issues)
-    : (mode === 'DEMO' ? currentCity.issues : currentCity.issues.slice(0, 4));
+  // Memoized active issues filtering (eliminates inline IIFE re-evaluations on every render)
+  const activeIssues: RoadEvent[] = useMemo(() => {
+    if (mode === 'LIVE') {
+      if (isLiveBackend) {
+        // Genuine spatial filter by city bounding perimeter (0.8 deg ≈ 88km radius)
+        return liveIssues.filter(issue => {
+          const dLat = Math.abs(issue.location.lat - currentCity.center.lat);
+          const dLng = Math.abs(issue.location.lng - currentCity.center.lng);
+          return dLat < 0.8 && dLng < 0.8;
+        });
+      }
+      // Offline fallback when backend unreachable
+      return currentCity.issues;
+    }
+    return mode === 'DEMO' ? currentCity.issues : currentCity.issues.slice(0, 4);
+  }, [mode, isLiveBackend, liveIssues, currentCity]);
 
-  const activeBuses: Bus[] = mode === 'LIVE'
-    ? (isLiveBackend && liveBuses.length > 0
-        ? (() => {
-            const cityBuses = liveBuses.filter(bus => {
-              const dLat = Math.abs(bus.currentLocation.lat - currentCity.center.lat);
-              const dLng = Math.abs(bus.currentLocation.lng - currentCity.center.lng);
-              return dLat < 0.8 && dLng < 0.8;
-            });
-            return cityBuses.length > 0 ? cityBuses : currentCity.buses;
-          })()
-        : currentCity.buses)
-    : (mode === 'DEMO' ? currentCity.buses : currentCity.buses.map(b => ({ ...b, status: 'idle' })));
+  // Memoized active buses filtering
+  const activeBuses: Bus[] = useMemo(() => {
+    if (mode === 'LIVE') {
+      if (isLiveBackend) {
+        return liveBuses.filter(bus => {
+          const dLat = Math.abs(bus.currentLocation.lat - currentCity.center.lat);
+          const dLng = Math.abs(bus.currentLocation.lng - currentCity.center.lng);
+          return dLat < 0.8 && dLng < 0.8;
+        });
+      }
+      return currentCity.buses;
+    }
+    return mode === 'DEMO' ? currentCity.buses : currentCity.buses.map(b => ({ ...b, status: 'idle' }));
+  }, [mode, isLiveBackend, liveBuses, currentCity]);
+
 
   // Streamlined 4 Core Navigation Items
   const primaryTabs: { id: MainTab; label: string; icon: string }[] = [
@@ -187,6 +198,39 @@ export default function App() {
           <RoleSwitcher />
         </div>
       </header>
+
+      {/* Explicit Truth-in-Reporting Banners */}
+      {mode === 'LIVE' && !isLiveBackend && (
+        <div className="bg-rose-950/90 border-b border-rose-600/60 px-6 py-2 flex items-center justify-between text-xs text-rose-200 z-10 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
+            <i className="fa-solid fa-triangle-exclamation text-rose-400 font-bold"></i>
+            <span className="font-semibold">
+              LIVE MODE OFFLINE: FastAPI backend unreachable at <code className="bg-rose-900/60 px-1.5 py-0.5 rounded text-white font-mono">http://127.0.0.1:8001</code>.
+            </span>
+            <span className="text-rose-300/80 hidden md:inline">Displaying cached demonstration telemetry. Start the backend or switch to DEMO mode.</span>
+          </div>
+          <button
+            onClick={fetchLiveBackendData}
+            className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded text-[11px] flex items-center gap-1.5 transition shadow-sm"
+          >
+            <i className="fa-solid fa-rotate text-[10px]"></i>
+            Retry Connection
+          </button>
+        </div>
+      )}
+
+      {mode === 'LIVE' && isLiveBackend && activeIssues.length === 0 && (
+        <div className="bg-cyan-950/70 border-b border-cyan-800/60 px-6 py-1.5 flex items-center justify-between text-xs text-cyan-200 z-10 shrink-0 font-mono">
+          <div className="flex items-center gap-2">
+            <i className="fa-solid fa-satellite-dish text-cyan-400"></i>
+            <span>
+              LIVE CORRIDOR ACTIVE: 0 defects detected within {currentCity.name} ({currentCity.stateCode}) perimeter. Database holds {liveIssues.length} active issues nationwide.
+            </span>
+          </div>
+          <span className="text-[11px] text-cyan-400/80 font-bold">All transit routes clear</span>
+        </div>
+      )}
 
       {/* Main View Area */}
       <main className="flex-1 overflow-hidden relative">

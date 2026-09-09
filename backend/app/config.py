@@ -33,8 +33,11 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173"
     ]
     
+    # Environment
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
+
     # Authentication & Security
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "urbanpulse-sih26124-production-secret-key-998822")
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "urbanpulse-dev-insecure-secret-change-in-prod-883311")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
     
@@ -59,7 +62,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_WINDOW: int = 60  # seconds
     ENABLE_RATE_LIMITING: bool = True
-    EDGE_DEVICE_API_KEY: str = os.getenv("EDGE_DEVICE_API_KEY", "urbanpulse-edge-bus-telemetry-key-2026")
+    EDGE_DEVICE_API_KEY: str = os.getenv("EDGE_DEVICE_API_KEY", "urbanpulse-dev-edge-key-2026")
 
     model_config = {
         "env_file": ".env",
@@ -67,5 +70,17 @@ class Settings(BaseSettings):
         "extra": "allow"
     }
 
+    def validate_production_secrets(self):
+        """Ensure no weak/default credentials or keys are permitted in production."""
+        is_prod = self.ENVIRONMENT.lower() in ("production", "prod") or (not self.DEBUG and os.getenv("ENVIRONMENT") == "production")
+        if is_prod:
+            insecure_secret_needles = ["urbanpulse-sih26124", "insecure", "change-in-prod", "dev-insecure", "secret-key"]
+            if any(needle in self.SECRET_KEY.lower() for needle in insecure_secret_needles) or len(self.SECRET_KEY) < 32:
+                raise ValueError("FATAL SECURITY VULNERABILITY: Insecure or default SECRET_KEY in production! Set a unique, cryptographically strong SECRET_KEY via environment variable.")
+            if "dev-edge-key" in self.EDGE_DEVICE_API_KEY.lower() or "telemetry-key-2026" in self.EDGE_DEVICE_API_KEY.lower():
+                raise ValueError("FATAL SECURITY VULNERABILITY: Insecure or default EDGE_DEVICE_API_KEY in production! Set a unique key via environment variable.")
+
 
 settings = Settings()
+settings.validate_production_secrets()
+
