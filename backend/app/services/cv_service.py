@@ -60,24 +60,29 @@ class RoadDefectYOLOEngine:
     @classmethod
     def get_instance(cls):
         if cls._instance is None:
-            # Look for specialized RDD road defect model first
+            # Look for specialized road defect models first
             base_dir = os.path.dirname(__file__)
             candidates = [
+                os.path.join(base_dir, "..", "..", "..", "models", "sabiq_yolo.pt"),
+                os.path.join(base_dir, "..", "..", "models", "sabiq_yolo.pt"),
+                os.path.join(base_dir, "..", "..", "sabiq_yolo.pt"),
+                "models/sabiq_yolo.pt",
+                "sabiq_yolo.pt",
                 os.path.join(base_dir, "..", "..", "rdd_yolov8n.pt"),
                 os.path.join(base_dir, "..", "..", "..", "models", "rdd_yolov8n.pt"),
                 os.path.join(base_dir, "..", "..", "yolov8n.pt"),
                 "rdd_yolov8n.pt",
                 "yolov8n.pt"
             ]
-            weights_path = "rdd_yolov8n.pt"
+            weights_path = "models/sabiq_yolo.pt"
             for c in candidates:
                 if os.path.exists(c):
-                    weights_path = c
+                    weights_path = os.path.abspath(c)
                     break
             cls._instance = cls(weights_path=weights_path)
         return cls._instance
 
-    def __init__(self, weights_path: str = "rdd_yolov8n.pt", confidence_threshold: float = 0.35):
+    def __init__(self, weights_path: str = "models/sabiq_yolo.pt", confidence_threshold: float = 0.25):
         self.weights_path = weights_path
         self.confidence_threshold = confidence_threshold
         self.privacy_anonymizer = PrivacyAnonymizer()
@@ -104,13 +109,13 @@ class RoadDefectYOLOEngine:
         supported = [str(n).lower() for n in names_list]
 
         return {
-            "model_name": "YOLOv8n-UrbanPulse-RDD2022",
+            "model_name": "YOLOv8-RoadDefectDetector",
             "weights_file": os.path.basename(self.weights_path),
             "weights_size_mb": file_size_mb,
-            "architecture": "YOLOv8 Nano (Anchor-Free Decoupled Head + Feature Pyramid)",
+            "architecture": "YOLOv8 (Anchor-Free Decoupled Head + Feature Pyramid)",
             "supported_classes": supported,
             "raw_classes": [str(n) for n in names_list],
-            "primary_defect_classes": list(ROAD_DEFECT_CLASSES.values()),
+            "primary_defect_classes": ["pothole", "road_crack", "road_patch"],
             "input_resolution": "640x640",
             "is_loaded": self.is_loaded,
             "confidence_threshold": self.confidence_threshold,
@@ -155,12 +160,26 @@ class RoadDefectYOLOEngine:
                 confidence = float(box.conf[0].cpu().numpy())
                 cls_id = int(box.cls[0].cpu().numpy())
 
-                # Direct, honest semantic class mapping from the trained model (no modulo remapping)
+                # Honest semantic class mapping
                 if hasattr(self.model, "names") and cls_id in self.model.names:
-                    raw_name = str(self.model.names[cls_id]).upper()
-                    class_label = RDD_ROAD_DEFECT_CLASSES.get(cls_id, raw_name.lower())
+                    raw_name = str(self.model.names[cls_id]).strip()
+                    name_clean = raw_name.lower()
+                    if "pothole" in name_clean:
+                        class_label = "pothole"
+                    elif "crack" in name_clean:
+                        class_label = "road_crack"
+                    elif "corruption" in name_clean or "patch" in name_clean:
+                        class_label = "road_patch"
+                    elif "unpaved" in name_clean or "subsidence" in name_clean:
+                        class_label = "unpaved_subsidence"
+                    elif "manhole" in name_clean:
+                        class_label = "manhole_defect"
+                    elif "bump" in name_clean:
+                        class_label = "speed_bump"
+                    else:
+                        class_label = name_clean.replace(" ", "_")
                 else:
-                    class_label = RDD_ROAD_DEFECT_CLASSES.get(cls_id, f"defect_{cls_id}")
+                    class_label = f"defect_{cls_id}"
 
                 detections.append({
                     "class": class_label,
