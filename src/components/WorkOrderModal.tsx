@@ -3,18 +3,35 @@
  */
 
 import React, { useState } from 'react';
-import { RoadEvent } from '../types';
+import { RoadEvent, CityConfig } from '../types';
 import { apiClient } from '../api/client';
 
 interface WorkOrderModalProps {
   issue: RoadEvent;
   onClose: () => void;
   onStatusUpdated?: (newStatus: string) => void;
+  city?: CityConfig;
 }
 
-export function WorkOrderModal({ issue, onClose, onStatusUpdated }: WorkOrderModalProps) {
-  const [department, setDepartment] = useState('BBMP Road Infrastructure Division');
-  const [contractor, setContractor] = useState('Rapid Asphalt Response Unit 4');
+export function WorkOrderModal({ issue, onClose, onStatusUpdated, city }: WorkOrderModalProps) {
+  const defaultDept = city?.id === 'amravati'
+    ? 'Amravati Municipal Corporation (AMC) — Public Works'
+    : city?.id === 'mumbai'
+    ? 'BMC Roads & Traffic Infrastructure'
+    : city?.id === 'pune'
+    ? 'Pune Municipal Corporation (PMC) — Road Dept'
+    : 'BBMP Road Infrastructure Division';
+
+  const defaultContractor = city?.id === 'amravati'
+    ? 'Vidarbha Infrastructure & Asphalt Unit 2'
+    : city?.id === 'mumbai'
+    ? 'Mumbai Suburban Rapid Road Repair Team'
+    : city?.id === 'pune'
+    ? 'Pune Highway Patch & Maintenance Cell'
+    : 'Rapid Asphalt Response Unit 4';
+
+  const [department, setDepartment] = useState(defaultDept);
+  const [contractor, setContractor] = useState(defaultContractor);
   const [notes, setNotes] = useState('Priority road restoration required within 24 hours.');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAdvancing, setIsAdvancing] = useState(false);
@@ -94,10 +111,36 @@ export function WorkOrderModal({ issue, onClose, onStatusUpdated }: WorkOrderMod
               onChange={(e) => setDepartment(e.target.value)}
               className="w-full bg-gray-800 border border-gray-700 rounded-md p-2 text-white focus:outline-hidden focus:border-blue-500"
             >
-              <option value="BBMP Road Infrastructure Division">BBMP Road Infrastructure Division</option>
-              <option value="BBMP Stormwater Drain Maintenance">BBMP Stormwater Drain Maintenance</option>
-              <option value="BTP Traffic Calming & Engineering Cell">BTP Traffic Calming & Engineering Cell</option>
-              <option value="NHAI Bengaluru Suburban Section">NHAI Bengaluru Suburban Section</option>
+              {city?.id === 'amravati' ? (
+                <>
+                  <option value="Amravati Municipal Corporation (AMC) — Public Works">Amravati Municipal Corporation (AMC) — Public Works</option>
+                  <option value="AMC Stormwater Drain Maintenance Cell">AMC Stormwater Drain Maintenance Cell</option>
+                  <option value="Maharashtra PWD — Amravati City Division">Maharashtra PWD — Amravati City Division</option>
+                  <option value="Amravati City Traffic Police — Safety Engineering">Amravati City Traffic Police — Safety Engineering</option>
+                  <option value="NHAI Badnera Bypass Section (NH-53)">NHAI Badnera Bypass Section (NH-53)</option>
+                </>
+              ) : city?.id === 'mumbai' ? (
+                <>
+                  <option value="BMC Roads & Traffic Infrastructure">BMC Roads & Traffic Infrastructure</option>
+                  <option value="BMC Stormwater Drains (SWD) Department">BMC Stormwater Drains (SWD) Department</option>
+                  <option value="Maharashtra PWD — Mumbai Suburban Division">Maharashtra PWD — Mumbai Suburban Division</option>
+                  <option value="MMRDA Highway Maintenance Wing">MMRDA Highway Maintenance Wing</option>
+                </>
+              ) : city?.id === 'pune' ? (
+                <>
+                  <option value="Pune Municipal Corporation (PMC) — Road Dept">Pune Municipal Corporation (PMC) — Road Dept</option>
+                  <option value="PMC Drainage & Stormwater Management">PMC Drainage & Stormwater Management</option>
+                  <option value="Maharashtra PWD — Pune Division">Maharashtra PWD — Pune Division</option>
+                  <option value="PMRDA Metro Feeder Corridor Maintenance">PMRDA Metro Feeder Corridor Maintenance</option>
+                </>
+              ) : (
+                <>
+                  <option value="BBMP Road Infrastructure Division">BBMP Road Infrastructure Division</option>
+                  <option value="BBMP Stormwater Drain Maintenance">BBMP Stormwater Drain Maintenance</option>
+                  <option value="BTP Traffic Calming & Engineering Cell">BTP Traffic Calming & Engineering Cell</option>
+                  <option value="NHAI Bengaluru Suburban Section">NHAI Bengaluru Suburban Section</option>
+                </>
+              )}
             </select>
           </div>
 

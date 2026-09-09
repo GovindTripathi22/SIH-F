@@ -8,6 +8,8 @@ interface Props {
   buses: Bus[];
   selectedEventId: string | null;
   onEventSelect: (id: string | null) => void;
+  center?: { lat: number; lng: number };
+  zoom?: number;
 }
 
 const EVENT_COLORS: Record<string, string> = {
@@ -82,7 +84,7 @@ function createBusIcon(bus: Bus): L.DivIcon {
   });
 }
 
-export function MapView({ events, buses, selectedEventId, onEventSelect }: Props) {
+export function MapView({ events, buses, selectedEventId, onEventSelect, center, zoom }: Props) {
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const markersRef = useRef<L.LayerGroup | null>(null);
@@ -90,9 +92,12 @@ export function MapView({ events, buses, selectedEventId, onEventSelect }: Props
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
+    const initialCenter = center ? [center.lat, center.lng] : [20.9374, 77.7580];
+    const initialZoom = zoom || 13;
+
     const map = L.map(mapContainerRef.current, {
-      center: [12.9716, 77.5946],
-      zoom: 12,
+      center: initialCenter as L.LatLngExpression,
+      zoom: initialZoom,
       zoomControl: false,
     });
 
@@ -111,6 +116,14 @@ export function MapView({ events, buses, selectedEventId, onEventSelect }: Props
       mapRef.current = null;
     };
   }, []);
+
+  // Smoothly fly to new city coordinates when center changes
+  useEffect(() => {
+    if (!mapRef.current || !center) return;
+    mapRef.current.flyTo([center.lat, center.lng], zoom || 13, {
+      duration: 1.2
+    });
+  }, [center?.lat, center?.lng, zoom]);
 
   useEffect(() => {
     if (!markersRef.current) return;

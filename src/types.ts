@@ -209,3 +209,23 @@ export interface ArchitectureModule {
   description: string;
   techStack: string[];
 }
+
+// ---------- Multi-City Support ----------
+
+export interface CityConfig {
+  id: string;
+  name: string;
+  state: string;
+  stateCode: string;
+  center: GeoLocation;
+  zoom: number;
+  authorityName: string;
+  authorityShort: string;
+  pwdDivision: string;
+  trafficPolice: string;
+  transitAgency: string;
+  fleetPrefix: string;
+  corridors: string[];
+  issues: RoadEvent[];
+  buses: Bus[];
+}

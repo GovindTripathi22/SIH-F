@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { RoadEvent, Bus } from '../types';
+import { RoadEvent, Bus, CityConfig } from '../types';
 import { MapView } from './MapView';
 import { EvidencePanel } from './EvidencePanel';
 import { WorkOrderModal } from './WorkOrderModal';
@@ -9,13 +9,15 @@ interface CommandDashboardProps {
   buses: Bus[];
   isLive?: boolean;
   onRefresh?: () => void;
+  city?: CityConfig;
 }
 
 export default function CommandDashboard({
   issues,
   buses,
   isLive = true,
-  onRefresh
+  onRefresh,
+  city
 }: CommandDashboardProps) {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [workOrderIssue, setWorkOrderIssue] = useState<RoadEvent | null>(null);
@@ -99,10 +101,10 @@ export default function CommandDashboard({
             <div className="flex items-center gap-2.5">
               <i className="fa-solid fa-map-location-dot text-cyan-400 text-sm"></i>
               <h2 className="text-xs font-bold uppercase tracking-wider text-white font-mono">
-                Bengaluru Transit GIS Matrix
+                {city ? `${city.name} Transit GIS Matrix` : 'Transit GIS Matrix'}
               </h2>
               <span className="text-[11px] text-slate-400 font-mono">
-                • Route 500-D, 201-C & 335-A
+                • {city ? city.corridors.slice(0, 2).join(' & ') : 'Corridors Active'}
               </span>
             </div>
             <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400">
@@ -128,6 +130,8 @@ export default function CommandDashboard({
               buses={buses}
               selectedEventId={selectedEventId}
               onEventSelect={setSelectedEventId}
+              center={city?.center}
+              zoom={city?.zoom}
             />
           </div>
         </div>
@@ -286,6 +290,7 @@ export default function CommandDashboard({
             setWorkOrderIssue(null);
             if (onRefresh) onRefresh();
           }}
+          city={city}
         />
       )}
     </div>

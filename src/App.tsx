@@ -10,6 +10,7 @@ import { RoleSwitcher } from './components/RoleSwitcher';
 import { simulatedEvents, simulatedBuses } from './data';
 import { RoadEvent, Bus } from './types';
 import { apiClient } from './api/client';
+import { SUPPORTED_CITIES, getCityConfig } from './cities';
 
 export type MainTab = 'command' | 'fleet' | 'demo' | 'analytics' | 'specs';
 export type OperationalMode = 'LIVE' | 'DEMO' | 'OFFLINE';
@@ -17,6 +18,10 @@ export type OperationalMode = 'LIVE' | 'DEMO' | 'OFFLINE';
 export default function App() {
   const [activeTab, setActiveTab] = useState<MainTab>('command');
   const [subSpecTab, setSubSpecTab] = useState<'architecture' | 'failures' | 'cv'>('architecture');
+
+  // Multi-City Management (Amravati MH, Bengaluru KA, Mumbai MH, Pune MH)
+  const [selectedCityId, setSelectedCityId] = useState<string>('amravati');
+  const currentCity = getCityConfig(selectedCityId);
 
   // 3-Mode Operational Architecture (LIVE / DEMO / OFFLINE)
   const [mode, setMode] = useState<OperationalMode>('LIVE');
@@ -49,14 +54,32 @@ export default function App() {
     }
   }, [mode, fetchLiveBackendData]);
 
-  // Determine active issues and buses based on operational mode
+  // Determine active issues and buses based on operational mode and selected city
   const activeIssues: RoadEvent[] = mode === 'LIVE'
-    ? (isLiveBackend ? liveIssues : [])
-    : (mode === 'DEMO' ? simulatedEvents : simulatedEvents.slice(0, 6));
+    ? (isLiveBackend && liveIssues.length > 0
+        ? (() => {
+            const cityIssues = liveIssues.filter(issue => {
+              const dLat = Math.abs(issue.location.lat - currentCity.center.lat);
+              const dLng = Math.abs(issue.location.lng - currentCity.center.lng);
+              return dLat < 0.8 && dLng < 0.8;
+            });
+            return cityIssues.length > 0 ? cityIssues : currentCity.issues;
+          })()
+        : currentCity.issues)
+    : (mode === 'DEMO' ? currentCity.issues : currentCity.issues.slice(0, 4));
 
   const activeBuses: Bus[] = mode === 'LIVE'
-    ? (isLiveBackend ? liveBuses : [])
-    : (mode === 'DEMO' ? simulatedBuses : simulatedBuses.map(b => ({ ...b, status: 'idle' })));
+    ? (isLiveBackend && liveBuses.length > 0
+        ? (() => {
+            const cityBuses = liveBuses.filter(bus => {
+              const dLat = Math.abs(bus.currentLocation.lat - currentCity.center.lat);
+              const dLng = Math.abs(bus.currentLocation.lng - currentCity.center.lng);
+              return dLat < 0.8 && dLng < 0.8;
+            });
+            return cityBuses.length > 0 ? cityBuses : currentCity.buses;
+          })()
+        : currentCity.buses)
+    : (mode === 'DEMO' ? currentCity.buses : currentCity.buses.map(b => ({ ...b, status: 'idle' })));
 
   // Streamlined 4 Core Navigation Items
   const primaryTabs: { id: MainTab; label: string; icon: string }[] = [
@@ -71,18 +94,36 @@ export default function App() {
     <div className="h-screen w-screen bg-[#0a0f1d] text-[#dee2f6] flex flex-col font-sans overflow-hidden">
       {/* Sleek, Modern, Minimalist Top Navigation Header */}
       <header className="bg-[#0e1321]/90 backdrop-blur-md border-b border-slate-800/80 px-6 py-2.5 flex items-center justify-between shrink-0 z-20">
-        {/* Brand & Logo */}
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-emerald-500 flex items-center justify-center shadow-md shadow-cyan-500/20 ring-1 ring-cyan-400/30">
-            <i className="fa-solid fa-city text-white text-xs"></i>
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-bold text-white tracking-tight">UrbanPulse</span>
-              <span className="text-[10px] font-mono text-cyan-400 font-semibold px-1.5 py-0.2 rounded bg-cyan-950/60 border border-cyan-500/30">
-                SIH26124
-              </span>
+        {/* Brand & Logo + City Selector */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-emerald-500 flex items-center justify-center shadow-md shadow-cyan-500/20 ring-1 ring-cyan-400/30">
+              <i className="fa-solid fa-city text-white text-xs"></i>
             </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold text-white tracking-tight">UrbanPulse</span>
+                <span className="text-[10px] font-mono text-cyan-400 font-semibold px-1.5 py-0.2 rounded bg-cyan-950/60 border border-cyan-500/30">
+                  SIH26124
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* City Selector Dropdown */}
+          <div className="flex items-center gap-1.5 bg-slate-950/90 border border-slate-800 rounded-lg px-2.5 py-1 text-xs">
+            <i className="fa-solid fa-location-dot text-cyan-400 text-[11px]"></i>
+            <select
+              value={selectedCityId}
+              onChange={e => setSelectedCityId(e.target.value)}
+              className="bg-transparent text-white font-bold font-mono text-xs focus:outline-none cursor-pointer pr-1"
+            >
+              {SUPPORTED_CITIES.map(c => (
+                <option key={c.id} value={c.id} className="bg-slate-900 text-white font-mono">
+                  {c.name} ({c.stateCode})
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -156,6 +197,7 @@ export default function App() {
             buses={activeBuses}
             isLive={mode === 'LIVE' && isLiveBackend}
             onRefresh={fetchLiveBackendData}
+            city={currentCity}
           />
         )}
 
