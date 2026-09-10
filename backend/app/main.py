@@ -13,7 +13,7 @@ from sqlalchemy import select, func
 
 from app.config import settings
 from app.database import init_db, close_db, async_session
-from app.api import events, issues, fleet, analytics, auth, cv, work_orders
+from app.api import events, issues, fleet, analytics, auth, cv, work_orders, websocket
 from app.middleware.audit import AuditMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.services.cv_service import RoadDefectYOLOEngine
@@ -139,6 +139,7 @@ app.include_router(fleet.router, prefix="/api/v1", tags=["Fleet"])
 app.include_router(analytics.router, prefix="/api/v1", tags=["Analytics"])
 app.include_router(cv.router, prefix="/api/v1", tags=["Edge CV Engine"])
 app.include_router(work_orders.router, prefix="/api/v1", tags=["Work Orders & Closed Loop"])
+app.include_router(websocket.router, tags=["Real-Time Feeds"])
 
 
 if __name__ == "__main__":

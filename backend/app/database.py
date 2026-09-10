@@ -18,6 +18,9 @@ engine_kwargs = {"echo": settings.DEBUG}
 if "sqlite" not in settings.DATABASE_URL:
     engine_kwargs["pool_size"] = settings.DATABASE_POOL_SIZE
     engine_kwargs["max_overflow"] = settings.DATABASE_MAX_OVERFLOW
+else:
+    # 30-second busy timeout prevents 'database is locked' errors under high-frequency writes
+    engine_kwargs["connect_args"] = {"timeout": 30.0}
 
 # Create async engine
 engine = create_async_engine(
@@ -453,6 +456,12 @@ async def seed_initial_data():
 async def init_db():
     """Initialize database - create tables if they don't exist, run migrations, and seed data"""
     async with engine.begin() as conn:
+        if "sqlite" in settings.DATABASE_URL:
+            try:
+                await conn.execute(text("PRAGMA journal_mode=WAL;"))
+                await conn.execute(text("PRAGMA synchronous=NORMAL;"))
+            except Exception as e:
+                logger.warning(f"Could not enable SQLite WAL mode: {e}")
         from app.models import event, issue, bus
         await conn.run_sync(Base.metadata.create_all)
         # Automated migration for verification_state column if running on existing database

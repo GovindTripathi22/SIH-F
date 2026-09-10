@@ -9,7 +9,7 @@ import { CVDemo } from './components/CVDemo';
 import { RoleSwitcher } from './components/RoleSwitcher';
 import { simulatedEvents, simulatedBuses } from './data';
 import { RoadEvent, Bus } from './types';
-import { apiClient } from './api/client';
+import { apiClient, mapBackendIssueToRoadEvent } from './api/client';
 import { SUPPORTED_CITIES, getCityConfig } from './cities';
 
 export type MainTab = 'command' | 'fleet' | 'demo' | 'analytics' | 'specs';
@@ -28,6 +28,7 @@ export default function App() {
   const [liveIssues, setLiveIssues] = useState<RoadEvent[]>([]);
   const [liveBuses, setLiveBuses] = useState<Bus[]>([]);
   const [isLiveBackend, setIsLiveBackend] = useState<boolean>(false);
+  const [wsConnected, setWsConnected] = useState<boolean>(false);
 
   const fetchLiveBackendData = useCallback(async () => {
     try {
@@ -46,18 +47,93 @@ export default function App() {
     }
   }, []);
 
-  // Polling with tab visibility awareness (pauses when browser tab is inactive)
+  // Real-Time WebSocket live feed subscription with automatic reconnection
+  useEffect(() => {
+    if (mode !== 'LIVE') {
+      setWsConnected(false);
+      return;
+    }
+
+    let socket: WebSocket | null = null;
+    let reconnectTimeout: any = null;
+    let isMounted = true;
+
+    const connectWS = () => {
+      try {
+        const wsUrl = apiClient.getWebSocketUrl();
+        socket = new WebSocket(wsUrl);
+
+        socket.onopen = () => {
+          if (!isMounted) return;
+          setWsConnected(true);
+          console.log('[UrbanPulse WS] Connected to live telematics feed');
+        };
+
+        socket.onmessage = (event) => {
+          if (!isMounted) return;
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'issue_update' && data.issue) {
+              const updatedEvent = mapBackendIssueToRoadEvent(data.issue);
+              setLiveIssues(prev => {
+                const idx = prev.findIndex(item => item.id === updatedEvent.id);
+                if (idx >= 0) {
+                  const next = [...prev];
+                  next[idx] = updatedEvent;
+                  return next;
+                }
+                return [updatedEvent, ...prev];
+              });
+            }
+          } catch {
+            // Ignore non-json frames
+          }
+        };
+
+        socket.onerror = () => {
+          if (!isMounted) return;
+          setWsConnected(false);
+        };
+
+        socket.onclose = () => {
+          if (!isMounted) return;
+          setWsConnected(false);
+          // Reconnect after 4s backoff if still in LIVE mode
+          reconnectTimeout = setTimeout(() => {
+            if (isMounted && mode === 'LIVE') {
+              connectWS();
+            }
+          }, 4000);
+        };
+      } catch {
+        setWsConnected(false);
+      }
+    };
+
+    connectWS();
+
+    return () => {
+      isMounted = false;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (socket) {
+        try { socket.close(); } catch {}
+      }
+    };
+  }, [mode]);
+
+  // Polling fallback: Run frequently when WS is disconnected, or slower background sync when WS is active
   useEffect(() => {
     if (mode === 'LIVE') {
       fetchLiveBackendData();
+      const pollIntervalMs = wsConnected ? 30000 : 6000;
       const interval = setInterval(() => {
         if (typeof document !== 'undefined' && !document.hidden) {
           fetchLiveBackendData();
         }
-      }, 6000);
+      }, pollIntervalMs);
       return () => clearInterval(interval);
     }
-  }, [mode, fetchLiveBackendData]);
+  }, [mode, wsConnected, fetchLiveBackendData]);
 
   // Memoized active issues filtering (eliminates inline IIFE re-evaluations on every render)
   const activeIssues: RoadEvent[] = useMemo(() => {
@@ -170,10 +246,10 @@ export default function App() {
                   ? (isLiveBackend ? 'bg-emerald-600 text-white shadow-sm' : 'bg-rose-600 text-white animate-pulse')
                   : 'text-slate-400 hover:text-white'
               }`}
-              title="Connect to live FastAPI & database backend"
+              title={wsConnected ? 'Connected to live FastAPI & Real-Time WebSocket stream' : 'Connect to live FastAPI & database backend'}
             >
               <span className={`w-1.5 h-1.5 rounded-full ${isLiveBackend ? 'bg-white' : 'bg-rose-200'}`}></span>
-              LIVE
+              LIVE {wsConnected ? <i className="fa-solid fa-bolt text-[9px] text-amber-300 ml-0.5" title="Real-Time WebSocket Feed Active"></i> : null}
             </button>
             <button
               onClick={() => setMode('DEMO')}

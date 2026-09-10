@@ -21,6 +21,7 @@ htmlcov/
 .env
 .DS_Store
 Thumbs.db
+.claude/
 
 # Heavy Model Weights (keep lightweight rdd_yolov8n.pt)
 weights/

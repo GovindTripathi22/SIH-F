@@ -58,6 +58,73 @@ export interface CVDetectionResponse {
   evidence_frame_base64: string;
 }
 
+/**
+ * Unified transformer mapping backend VerifiedIssue schema into frontend RoadEvent format.
+ * Shared between initial REST fetch and live WebSocket stream updates.
+ */
+export function mapBackendIssueToRoadEvent(item: any): RoadEvent {
+  let reasons: string[] = [];
+  try {
+    if (item.priority_reasons) {
+      reasons = typeof item.priority_reasons === 'string'
+        ? JSON.parse(item.priority_reasons)
+        : item.priority_reasons;
+    }
+  } catch {
+    reasons = [item.priority_reasons || 'Verified observation'];
+  }
+
+  const sevNum = item.severity === 'SAFETY_HAZARD' ? 9 : (item.severity === 'SEVERE' ? 7 : (item.severity === 'MODERATE' ? 5 : 3));
+  const firstTime = item.first_observed || new Date().toISOString();
+  const lastTime = item.last_observed || new Date().toISOString();
+
+  // Honest observation attribution without fabricating license plates
+  const observations = (item.observations && Array.isArray(item.observations) && item.observations.length > 0)
+    ? item.observations.map((obs: any, idx: number) => ({
+        id: obs.observation_id || `obs-${item.issue_id}-${idx + 1}`,
+        busId: obs.bus_id || `Fleet Unit #${idx + 1}`,
+        timestamp: obs.timestamp || firstTime,
+        confidence: obs.confidence || item.confidence || 0.88,
+        location: {
+          lat: obs.latitude || item.centroid_latitude,
+          lng: obs.longitude || item.centroid_longitude
+        }
+      }))
+    : Array.from({ length: Math.max(1, item.observation_count || 1) }, (_, idx) => ({
+        id: `obs-${item.issue_id}-${idx + 1}`,
+        busId: idx === 0 ? `Primary Probe` : `Corroborating Unit #${idx + 1}`,
+        timestamp: idx === 0 ? firstTime : lastTime,
+        confidence: item.confidence || 0.88,
+        location: {
+          lat: item.centroid_latitude,
+          lng: item.centroid_longitude
+        }
+      }));
+
+  const lat = typeof item.centroid_latitude === 'number' ? item.centroid_latitude : parseFloat(item.centroid_latitude || 0);
+  const lng = typeof item.centroid_longitude === 'number' ? item.centroid_longitude : parseFloat(item.centroid_longitude || 0);
+
+  return {
+    id: item.issue_id,
+    type: (item.event_type || 'pothole') as any,
+    location: {
+      lat,
+      lng
+    },
+    firstDetected: firstTime,
+    lastDetected: lastTime,
+    observations,
+    status: (item.status === 'PENDING' ? (item.observation_count >= 2 ? 'verified' : 'pending_verify') :
+             (item.status === 'RESOLVED' || item.status === 'RESOLUTION_VERIFIED' ? 'resolved' : 'actioned')) as any,
+    priority: (item.priority?.toLowerCase() || 'medium') as any,
+    severity: sevNum,
+    description: reasons[0] || `Detected ${item.event_type} at coordinates (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
+    address: `Monitored Transit Corridor (${lat.toFixed(3)}, ${lng.toFixed(3)})`,
+    createdAt: firstTime,
+    updatedAt: lastTime
+  };
+}
+
 class APIClient {
   private isOnline = false;
   private token: string | null = null;
@@ -196,70 +263,27 @@ class APIClient {
   }
 
   /**
-   * Fetch all verified issues from database
+   * Get authenticated WebSocket feed URL
+   */
+  getWebSocketUrl(): string {
+    const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = typeof window !== 'undefined' ? window.location.host : '127.0.0.1:5173';
+    let url = `${protocol}//${host}/ws/live-feed`;
+    if (this.token) {
+      url += `?token=${encodeURIComponent(this.token)}`;
+    }
+    return url;
+  }
+
+  /**
+   * Fetch paginated verified issues from backend PostGIS database.
    */
   async getIssues(): Promise<{ issues: RoadEvent[]; source: 'database' | 'offline_fallback' }> {
     try {
       const data = await this.request<any>('/api/v1/issues?page_size=100', {}, 4000);
       this.isOnline = true;
 
-      // Transform backend VerifiedIssue into frontend RoadEvent format
-      const mapped: RoadEvent[] = (data.items || []).map((item: any) => {
-        let reasons: string[] = [];
-        try {
-          if (item.priority_reasons) reasons = JSON.parse(item.priority_reasons);
-        } catch {
-          reasons = [item.priority_reasons || 'Verified observation'];
-        }
-
-        const sevNum = item.severity === 'SAFETY_HAZARD' ? 9 : (item.severity === 'SEVERE' ? 7 : (item.severity === 'MODERATE' ? 5 : 3));
-        const firstTime = item.first_observed || new Date().toISOString();
-        const lastTime = item.last_observed || new Date().toISOString();
-
-        // Honest observation attribution without fabricating license plates
-        const observations = (item.observations && Array.isArray(item.observations) && item.observations.length > 0)
-          ? item.observations.map((obs: any, idx: number) => ({
-              id: obs.observation_id || `obs-${item.issue_id}-${idx + 1}`,
-              busId: obs.bus_id || `Fleet Unit #${idx + 1}`,
-              timestamp: obs.timestamp || firstTime,
-              confidence: obs.confidence || item.confidence || 0.88,
-              location: {
-                lat: obs.latitude || item.centroid_latitude,
-                lng: obs.longitude || item.centroid_longitude
-              }
-            }))
-          : Array.from({ length: Math.max(1, item.observation_count || 1) }, (_, idx) => ({
-              id: `obs-${item.issue_id}-${idx + 1}`,
-              busId: idx === 0 ? `Primary Probe` : `Corroborating Unit #${idx + 1}`,
-              timestamp: idx === 0 ? firstTime : lastTime,
-              confidence: item.confidence || 0.88,
-              location: {
-                lat: item.centroid_latitude,
-                lng: item.centroid_longitude
-              }
-            }));
-
-        return {
-          id: item.issue_id,
-          type: (item.event_type || 'pothole') as any,
-          location: {
-            lat: item.centroid_latitude,
-            lng: item.centroid_longitude
-          },
-          firstDetected: firstTime,
-          lastDetected: lastTime,
-          observations,
-          status: (item.status === 'PENDING' ? (item.observation_count >= 2 ? 'verified' : 'pending_verify') :
-                   (item.status === 'RESOLVED' || item.status === 'RESOLUTION_VERIFIED' ? 'resolved' : 'actioned')) as any,
-          priority: (item.priority?.toLowerCase() || 'medium') as any,
-          severity: sevNum,
-          description: reasons[0] || `Detected ${item.event_type} at coordinates (${item.centroid_latitude.toFixed(4)}, ${item.centroid_longitude.toFixed(4)})`,
-          address: `Monitored Transit Corridor (${item.centroid_latitude.toFixed(3)}, ${item.centroid_longitude.toFixed(3)})`,
-          createdAt: firstTime,
-          updatedAt: lastTime
-        };
-      });
-
+      const mapped: RoadEvent[] = (data.items || []).map(mapBackendIssueToRoadEvent);
       return { issues: mapped, source: 'database' };
     } catch (err) {
       console.warn('Backend unavailable, falling back to cached simulated events:', err);
