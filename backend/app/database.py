@@ -18,6 +18,9 @@ engine_kwargs = {"echo": settings.DEBUG}
 if "sqlite" not in settings.DATABASE_URL:
     engine_kwargs["pool_size"] = settings.DATABASE_POOL_SIZE
     engine_kwargs["max_overflow"] = settings.DATABASE_MAX_OVERFLOW
+else:
+    # 30-second busy timeout prevents 'database is locked' errors under high-frequency writes
+    engine_kwargs["connect_args"] = {"timeout": 30.0}
 
 # Create async engine
 engine = create_async_engine(
@@ -38,6 +41,160 @@ class Base(DeclarativeBase):
     pass
 
 
+def get_amravati_buses(now: datetime):
+    """Factory for standard Amravati fleet telemetry seed data"""
+    from app.models.bus import Bus
+    return [
+        Bus(
+            bus_id="bus-mh27-01",
+            registration_number="MH-27-X-4011",
+            bus_type="MSRTC City MidiBus",
+            capacity=34,
+            camera_id="cam-amr-01-fwd",
+            camera_status="ONLINE",
+            current_route_id="Route 1A (Badnera-Rajkamal)",
+            current_status="ACTIVE",
+            current_latitude=20.9250,
+            current_longitude=77.7560,
+            last_speed_kmh=32.0,
+            last_ping=now,
+            total_events_detected=16,
+            total_distance_km=142.5
+        ),
+        Bus(
+            bus_id="bus-mh27-02",
+            registration_number="MH-27-X-4012",
+            bus_type="Tata Starbus Urban",
+            capacity=40,
+            camera_id="cam-amr-02-fwd",
+            camera_status="ONLINE",
+            current_route_id="Route 3 (Irwin-SGBAU)",
+            current_status="ACTIVE",
+            current_latitude=20.9520,
+            current_longitude=77.7680,
+            last_speed_kmh=26.5,
+            last_ping=now,
+            total_events_detected=21,
+            total_distance_km=165.0
+        ),
+        Bus(
+            bus_id="bus-mh27-03",
+            registration_number="MH-27-X-4013",
+            bus_type="Ashok Leyland Mitr",
+            capacity=30,
+            camera_id="cam-amr-03-fwd",
+            camera_status="ONLINE",
+            current_route_id="Route 5 (CottonMarket-Walgaon)",
+            current_status="ACTIVE",
+            current_latitude=20.9410,
+            current_longitude=77.7490,
+            last_speed_kmh=35.0,
+            last_ping=now,
+            total_events_detected=11,
+            total_distance_km=118.0
+        ),
+    ]
+
+
+def get_amravati_issues(now: datetime):
+    """Factory for standard Amravati verified civic issues seed data"""
+    from app.models.issue import VerifiedIssue
+    return [
+        VerifiedIssue(
+            issue_id="amr-issue-001",
+            centroid_latitude=20.9258,
+            centroid_longitude=77.7582,
+            event_type="pothole",
+            severity="SAFETY_HAZARD",
+            priority="CRITICAL",
+            status="PENDING",
+            verification_state="VERIFIED",
+            observation_count=5,
+            distinct_bus_count=3,
+            confidence=0.95,
+            verification_score=0.93,
+            priority_score=92.5,
+            first_observed=now,
+            last_observed=now,
+            cluster_radius_meters=11.8,
+            priority_reasons=json.dumps([
+                "Deep impact pothole (~45cm diameter, 9cm depth) on Badnera Road NH-53 approach",
+                "Near Rajapeth Flyover landing - heavy truck and bus corridor",
+                "Corroborated by 3 distinct MSRTC transit buses (BUS-MH27-01, BUS-MH27-04)",
+                "Severe two-wheeler skid hazard reported to AMC & PWD Amravati"
+            ])
+        ),
+        VerifiedIssue(
+            issue_id="amr-issue-002",
+            centroid_latitude=20.9465,
+            centroid_longitude=77.7650,
+            event_type="road_crack",
+            severity="SEVERE",
+            priority="HIGH",
+            status="IN_PROGRESS",
+            verification_state="ACTIONED",
+            observation_count=3,
+            distinct_bus_count=2,
+            confidence=0.87,
+            verification_score=0.85,
+            priority_score=81.0,
+            first_observed=now,
+            last_observed=now,
+            cluster_radius_meters=14.2,
+            priority_reasons=json.dumps([
+                "Extensive longitudinal fatigue cracking on Morshi State Highway corridor",
+                "Near Panchavati Square to Tapovan junction",
+                "Corroborated by BUS-MH27-02 and BUS-MH27-03"
+            ])
+        ),
+        VerifiedIssue(
+            issue_id="amr-issue-003",
+            centroid_latitude=20.9320,
+            centroid_longitude=77.7510,
+            event_type="waterlogging",
+            severity="SAFETY_HAZARD",
+            priority="CRITICAL",
+            status="PENDING",
+            verification_state="VERIFIED",
+            observation_count=4,
+            distinct_bus_count=2,
+            confidence=0.94,
+            verification_score=0.92,
+            priority_score=95.0,
+            first_observed=now,
+            last_observed=now,
+            cluster_radius_meters=16.0,
+            priority_reasons=json.dumps([
+                "Severe storm drain overflow (>25cm water depth) under Irwin Hospital railway subway",
+                "Subway impassable for two-wheelers and auto-rickshaws",
+                "Critical transit link between Old City and Amravati Railway Station"
+            ])
+        ),
+        VerifiedIssue(
+            issue_id="amr-issue-004",
+            centroid_latitude=20.9680,
+            centroid_longitude=77.7725,
+            event_type="pothole",
+            severity="MODERATE",
+            priority="HIGH",
+            status="PENDING",
+            verification_state="VERIFIED",
+            observation_count=3,
+            distinct_bus_count=2,
+            confidence=0.89,
+            verification_score=0.87,
+            priority_score=79.0,
+            first_observed=now,
+            last_observed=now,
+            cluster_radius_meters=12.0,
+            priority_reasons=json.dumps([
+                "Asphalt disintegration and clustered potholes on SGBAU University Gate approach",
+                "High density student two-wheeler traffic on Tapovan Road"
+            ])
+        ),
+    ]
+
+
 async def seed_initial_data():
     """Seed initial buses, routes, and verified issues if tables are empty"""
     from app.models.bus import Bus, Route
@@ -54,155 +211,11 @@ async def seed_initial_data():
             if amr_bus.scalar_one_or_none() is None:
                 logger.info("Injecting Amravati fleet & infrastructure issues into existing database...")
                 now = datetime.now(timezone.utc)
-                amr_buses = [
-                    Bus(
-                        bus_id="bus-mh27-01",
-                        registration_number="MH-27-X-4011",
-                        bus_type="MSRTC City MidiBus",
-                        capacity=34,
-                        camera_id="cam-amr-01-fwd",
-                        camera_status="ONLINE",
-                        current_route_id="Route 1A (Badnera-Rajkamal)",
-                        current_status="ACTIVE",
-                        current_latitude=20.9250,
-                        current_longitude=77.7560,
-                        last_speed_kmh=32.0,
-                        last_ping=now,
-                        total_events_detected=16,
-                        total_distance_km=142.5
-                    ),
-                    Bus(
-                        bus_id="bus-mh27-02",
-                        registration_number="MH-27-X-4012",
-                        bus_type="Tata Starbus Urban",
-                        capacity=40,
-                        camera_id="cam-amr-02-fwd",
-                        camera_status="ONLINE",
-                        current_route_id="Route 3 (Irwin-SGBAU)",
-                        current_status="ACTIVE",
-                        current_latitude=20.9520,
-                        current_longitude=77.7680,
-                        last_speed_kmh=26.5,
-                        last_ping=now,
-                        total_events_detected=21,
-                        total_distance_km=165.0
-                    ),
-                    Bus(
-                        bus_id="bus-mh27-03",
-                        registration_number="MH-27-X-4013",
-                        bus_type="Ashok Leyland Mitr",
-                        capacity=30,
-                        camera_id="cam-amr-03-fwd",
-                        camera_status="ONLINE",
-                        current_route_id="Route 5 (CottonMarket-Walgaon)",
-                        current_status="ACTIVE",
-                        current_latitude=20.9410,
-                        current_longitude=77.7490,
-                        last_speed_kmh=35.0,
-                        last_ping=now,
-                        total_events_detected=11,
-                        total_distance_km=118.0
-                    ),
-                ]
-                session.add_all(amr_buses)
-
-                amr_issues = [
-                    VerifiedIssue(
-                        issue_id="amr-issue-001",
-                        centroid_latitude=20.9258,
-                        centroid_longitude=77.7582,
-                        event_type="pothole",
-                        severity="SAFETY_HAZARD",
-                        priority="CRITICAL",
-                        status="PENDING",
-                        verification_state="VERIFIED",
-                        observation_count=5,
-                        distinct_bus_count=3,
-                        confidence=0.95,
-                        verification_score=0.93,
-                        priority_score=92.5,
-                        first_observed=now,
-                        last_observed=now,
-                        cluster_radius_meters=11.8,
-                        priority_reasons=json.dumps([
-                            "Deep impact pothole (~45cm diameter, 9cm depth) on Badnera Road NH-53 approach",
-                            "Near Rajapeth Flyover landing - heavy truck and bus corridor",
-                            "Corroborated by 3 distinct MSRTC transit buses (BUS-MH27-01, BUS-MH27-04)",
-                            "Severe two-wheeler skid hazard reported to AMC & PWD Amravati"
-                        ])
-                    ),
-                    VerifiedIssue(
-                        issue_id="amr-issue-002",
-                        centroid_latitude=20.9465,
-                        centroid_longitude=77.7650,
-                        event_type="road_crack",
-                        severity="SEVERE",
-                        priority="HIGH",
-                        status="IN_PROGRESS",
-                        verification_state="ACTIONED",
-                        observation_count=3,
-                        distinct_bus_count=2,
-                        confidence=0.87,
-                        verification_score=0.85,
-                        priority_score=81.0,
-                        first_observed=now,
-                        last_observed=now,
-                        cluster_radius_meters=14.2,
-                        priority_reasons=json.dumps([
-                            "Extensive longitudinal fatigue cracking on Morshi State Highway corridor",
-                            "Near Panchavati Square to Tapovan junction",
-                            "Corroborated by BUS-MH27-02 and BUS-MH27-03"
-                        ])
-                    ),
-                    VerifiedIssue(
-                        issue_id="amr-issue-003",
-                        centroid_latitude=20.9320,
-                        centroid_longitude=77.7510,
-                        event_type="waterlogging",
-                        severity="SAFETY_HAZARD",
-                        priority="CRITICAL",
-                        status="PENDING",
-                        verification_state="VERIFIED",
-                        observation_count=4,
-                        distinct_bus_count=2,
-                        confidence=0.94,
-                        verification_score=0.92,
-                        priority_score=95.0,
-                        first_observed=now,
-                        last_observed=now,
-                        cluster_radius_meters=16.0,
-                        priority_reasons=json.dumps([
-                            "Severe storm drain overflow (>25cm water depth) under Irwin Hospital railway subway",
-                            "Subway impassable for two-wheelers and auto-rickshaws",
-                            "Critical transit link between Old City and Amravati Railway Station"
-                        ])
-                    ),
-                    VerifiedIssue(
-                        issue_id="amr-issue-004",
-                        centroid_latitude=20.9680,
-                        centroid_longitude=77.7725,
-                        event_type="pothole",
-                        severity="MODERATE",
-                        priority="HIGH",
-                        status="PENDING",
-                        verification_state="VERIFIED",
-                        observation_count=3,
-                        distinct_bus_count=2,
-                        confidence=0.89,
-                        verification_score=0.87,
-                        priority_score=79.0,
-                        first_observed=now,
-                        last_observed=now,
-                        cluster_radius_meters=12.0,
-                        priority_reasons=json.dumps([
-                            "Asphalt disintegration and clustered potholes on SGBAU University Gate approach",
-                            "High density student two-wheeler traffic on Tapovan Road"
-                        ])
-                    ),
-                ]
-                session.add_all(amr_issues)
+                session.add_all(get_amravati_buses(now))
+                session.add_all(get_amravati_issues(now))
                 await session.commit()
             return  # Done
+
 
         logger.info("Seeding initial fleet and infrastructure data into database...")
 
@@ -331,54 +344,7 @@ async def seed_initial_data():
                 total_distance_km=305.1
             ),
             # Amravati (Maharashtra - MH-27) Fleet
-            Bus(
-                bus_id="bus-mh27-01",
-                registration_number="MH-27-X-4011",
-                bus_type="MSRTC City MidiBus",
-                capacity=34,
-                camera_id="cam-amr-01-fwd",
-                camera_status="ONLINE",
-                current_route_id="Route 1A (Badnera-Rajkamal)",
-                current_status="ACTIVE",
-                current_latitude=20.9250,
-                current_longitude=77.7560,
-                last_speed_kmh=32.0,
-                last_ping=now,
-                total_events_detected=16,
-                total_distance_km=142.5
-            ),
-            Bus(
-                bus_id="bus-mh27-02",
-                registration_number="MH-27-X-4012",
-                bus_type="Tata Starbus Urban",
-                capacity=40,
-                camera_id="cam-amr-02-fwd",
-                camera_status="ONLINE",
-                current_route_id="Route 3 (Irwin-SGBAU)",
-                current_status="ACTIVE",
-                current_latitude=20.9520,
-                current_longitude=77.7680,
-                last_speed_kmh=26.5,
-                last_ping=now,
-                total_events_detected=21,
-                total_distance_km=165.0
-            ),
-            Bus(
-                bus_id="bus-mh27-03",
-                registration_number="MH-27-X-4013",
-                bus_type="Ashok Leyland Mitr",
-                capacity=30,
-                camera_id="cam-amr-03-fwd",
-                camera_status="ONLINE",
-                current_route_id="Route 5 (CottonMarket-Walgaon)",
-                current_status="ACTIVE",
-                current_latitude=20.9410,
-                current_longitude=77.7490,
-                last_speed_kmh=35.0,
-                last_ping=now,
-                total_events_detected=11,
-                total_distance_km=118.0
-            ),
+            *get_amravati_buses(now)
         ]
         session.add_all(buses)
 
@@ -480,98 +446,7 @@ async def seed_initial_data():
                 ])
             ),
             # Amravati (Maharashtra) Verified Issues
-            VerifiedIssue(
-                issue_id="amr-issue-001",
-                centroid_latitude=20.9258,
-                centroid_longitude=77.7582,
-                event_type="pothole",
-                severity="SAFETY_HAZARD",
-                priority="CRITICAL",
-                status="PENDING",
-                verification_state="VERIFIED",
-                observation_count=5,
-                distinct_bus_count=3,
-                confidence=0.95,
-                verification_score=0.93,
-                priority_score=92.5,
-                first_observed=now,
-                last_observed=now,
-                cluster_radius_meters=11.8,
-                priority_reasons=json.dumps([
-                    "Deep impact pothole (~45cm diameter, 9cm depth) on Badnera Road NH-53 approach",
-                    "Near Rajapeth Flyover landing - heavy truck and bus corridor",
-                    "Corroborated by 3 distinct MSRTC transit buses (BUS-MH27-01, BUS-MH27-04)",
-                    "Severe two-wheeler skid hazard reported to AMC & PWD Amravati"
-                ])
-            ),
-            VerifiedIssue(
-                issue_id="amr-issue-002",
-                centroid_latitude=20.9465,
-                centroid_longitude=77.7650,
-                event_type="road_crack",
-                severity="SEVERE",
-                priority="HIGH",
-                status="IN_PROGRESS",
-                verification_state="ACTIONED",
-                observation_count=3,
-                distinct_bus_count=2,
-                confidence=0.87,
-                verification_score=0.85,
-                priority_score=81.0,
-                first_observed=now,
-                last_observed=now,
-                cluster_radius_meters=14.2,
-                priority_reasons=json.dumps([
-                    "Extensive longitudinal fatigue cracking on Morshi State Highway corridor",
-                    "Near Panchavati Square to Tapovan junction",
-                    "Corroborated by BUS-MH27-02 and BUS-MH27-03"
-                ])
-            ),
-            VerifiedIssue(
-                issue_id="amr-issue-003",
-                centroid_latitude=20.9320,
-                centroid_longitude=77.7510,
-                event_type="waterlogging",
-                severity="SAFETY_HAZARD",
-                priority="CRITICAL",
-                status="PENDING",
-                verification_state="VERIFIED",
-                observation_count=4,
-                distinct_bus_count=2,
-                confidence=0.94,
-                verification_score=0.92,
-                priority_score=95.0,
-                first_observed=now,
-                last_observed=now,
-                cluster_radius_meters=16.0,
-                priority_reasons=json.dumps([
-                    "Severe storm drain overflow (>25cm water depth) under Irwin Hospital railway subway",
-                    "Subway impassable for two-wheelers and auto-rickshaws",
-                    "Critical transit link between Old City and Amravati Railway Station"
-                ])
-            ),
-            VerifiedIssue(
-                issue_id="amr-issue-004",
-                centroid_latitude=20.9680,
-                centroid_longitude=77.7725,
-                event_type="pothole",
-                severity="MODERATE",
-                priority="HIGH",
-                status="PENDING",
-                verification_state="VERIFIED",
-                observation_count=3,
-                distinct_bus_count=2,
-                confidence=0.89,
-                verification_score=0.87,
-                priority_score=79.0,
-                first_observed=now,
-                last_observed=now,
-                cluster_radius_meters=12.0,
-                priority_reasons=json.dumps([
-                    "Asphalt disintegration and clustered potholes on SGBAU University Gate approach",
-                    "High density student two-wheeler traffic on Tapovan Road"
-                ])
-            ),
+            *get_amravati_issues(now)
         ]
         session.add_all(issues)
         await session.commit()
@@ -581,13 +456,23 @@ async def seed_initial_data():
 async def init_db():
     """Initialize database - create tables if they don't exist, run migrations, and seed data"""
     async with engine.begin() as conn:
+        if "sqlite" in settings.DATABASE_URL:
+            try:
+                await conn.execute(text("PRAGMA journal_mode=WAL;"))
+                await conn.execute(text("PRAGMA synchronous=NORMAL;"))
+            except Exception as e:
+                logger.warning(f"Could not enable SQLite WAL mode: {e}")
         from app.models import event, issue, bus
         await conn.run_sync(Base.metadata.create_all)
         # Automated migration for verification_state column if running on existing database
         try:
             await conn.execute(text("ALTER TABLE verified_issues ADD COLUMN verification_state VARCHAR(30) DEFAULT 'CANDIDATE'"))
-        except Exception:
-            pass
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "duplicate column" in err_msg or "already exists" in err_msg:
+                logger.debug("verification_state column already present in verified_issues table")
+            else:
+                logger.info(f"Schema migration note (verification_state): {e}")
     await seed_initial_data()
 
 

@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 import logging
 import json
 
+from typing import Tuple, Optional
 from app.models.event import RawEvent
+from app.models.issue import VerifiedIssue
 from app.models.bus import Route
 from app.schemas.event import EventCreate
 from app.services.spatial_clustering import MultiPassVerificationEngine
@@ -24,10 +26,11 @@ class EventService:
         self.db = db
         self.clustering_engine = MultiPassVerificationEngine(db)
     
-    async def create_event(self, event_data: EventCreate) -> RawEvent:
+    async def create_event_with_issue(self, event_data: EventCreate) -> Tuple[RawEvent, VerifiedIssue, bool]:
         """
         Create a new raw event and execute multi-pass verification to update or create
-        a consolidated verified issue. Snaps GPS coordinate to corridor centerline when route exists.
+        a consolidated verified issue. Returns (RawEvent, VerifiedIssue, is_new: bool).
+        Snaps GPS coordinate to corridor centerline when route exists.
         """
         # Validate GPS coordinates
         is_valid_gps, gps_msg = GPSService.validate_reading(
@@ -109,6 +112,14 @@ class EventService:
             f"(new={is_new}, total_obs={issue.observation_count}, distinct_buses={issue.distinct_bus_count})"
         )
         
+        return event, issue, is_new
+
+    async def create_event(self, event_data: EventCreate) -> RawEvent:
+        """
+        Create a new raw event and execute multi-pass verification.
+        Returns the created RawEvent (maintains backwards-compatible signature).
+        """
+        event, _, _ = await self.create_event_with_issue(event_data)
         return event
     
     async def get_event_by_id(self, event_id: str) -> RawEvent:

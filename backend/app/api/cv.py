@@ -7,13 +7,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import numpy as np
 import cv2
 import uuid
+import asyncio
 from datetime import datetime, timezone
 import logging
 
 from app.database import get_db
 from app.services.cv_service import RoadDefectYOLOEngine
 from app.schemas.event import EventCreate, EventType
+from app.schemas.issue import IssueResponse
 from app.services.event_service import EventService
+from app.api.websocket import manager
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +38,7 @@ async def detect_frame(
 ):
     """
     Run real YOLOv8 deep-learning inference on an uploaded frame.
+    Offloaded to threadpool with asyncio.to_thread to prevent blocking the async event loop.
     Measures inference latency, FPS, camera health, and applies privacy blurring.
     """
     contents = await file.read()
@@ -48,7 +52,8 @@ async def detect_frame(
         )
 
     engine = RoadDefectYOLOEngine.get_instance()
-    result = engine.detect_frame(
+    result = await asyncio.to_thread(
+        engine.detect_frame,
         frame_bgr=frame,
         apply_privacy=apply_privacy,
         conf_threshold=confidence_threshold
@@ -69,14 +74,15 @@ async def detect_and_ingest(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Complete Edge-to-PostGIS Pipeline:
+    Complete Edge-to-PostGIS Pipeline with Real-Time Push:
     1. Reads frame
     2. Camera health check (Laplacian blur / lighting)
     3. Blurs faces & plates (Privacy-by-Design)
-    4. Runs real YOLOv8 deep-learning defect detector
+    4. Runs real YOLOv8 deep-learning defect detector in threadpool
     5. Geotags event with GPS & timestamp
     6. Stores RawEvent in database
-    7. Runs multi-pass spatial verification and updates/creates VerifiedIssue!
+    7. Runs multi-pass spatial verification and updates/creates VerifiedIssue
+    8. Broadcasts verified issue update to all connected WebSocket clients in real time!
     """
     contents = await file.read()
     nparr = np.frombuffer(contents, np.uint8)
@@ -89,7 +95,8 @@ async def detect_and_ingest(
         )
 
     engine = RoadDefectYOLOEngine.get_instance()
-    cv_result = engine.detect_frame(
+    cv_result = await asyncio.to_thread(
+        engine.detect_frame,
         frame_bgr=frame,
         apply_privacy=True,
         conf_threshold=confidence_threshold
@@ -126,13 +133,30 @@ async def detect_and_ingest(
     )
 
     event_service = EventService(db)
-    raw_event = await event_service.create_event(event_create)
+    raw_event, verified_issue, is_new = await event_service.create_event_with_issue(event_create)
+
+    # Broadcast real-time issue update over WebSocket
+    if verified_issue:
+        try:
+            issue_dict = IssueResponse.model_validate(verified_issue).model_dump(mode="json")
+            await manager.broadcast({
+                "type": "issue_update",
+                "issue": issue_dict,
+                "is_new": is_new,
+                "event_id": raw_event.event_id,
+                "bus_id": bus_id,
+                "timestamp": raw_event.timestamp.isoformat() if raw_event.timestamp else None
+            })
+        except Exception as exc:
+            logger.warning(f"Failed to broadcast WebSocket live feed update: {exc}")
 
     return {
         "status": "INGESTED_AND_VERIFIED",
         "event_id": raw_event.event_id,
         "event_type": raw_event.event_type,
         "confidence": raw_event.confidence,
+        "verified_issue_id": verified_issue.issue_id if verified_issue else None,
+        "detections": detections,
         "cv_performance": {
             "latency_ms": cv_result["inference_latency_ms"],
             "fps": cv_result["fps"],

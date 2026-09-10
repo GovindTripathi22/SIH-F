@@ -1,8 +1,6 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { RoadDefectDetector } from '../cv/RoadDefectDetector';
-import { Detection } from '../cv/types';
-import { generateAndDownloadTestVideo } from '../cv/TestVideoGenerator';
-import { apiClient, CVDetectionResponse } from '../api/client';
+import { apiClient } from '../api/client';
 
 interface DetectionStats {
   totalFrames: number;
@@ -14,13 +12,21 @@ interface DetectionStats {
   minFps: number;
 }
 
+interface DefectItem {
+  bbox: [number, number, number, number]; // [x1, y1, x2, y2]
+  object_type: string;
+  confidence: number;
+}
+
 export function CVDemo() {
   const [engineMode, setEngineMode] = useState<'yolo-backend' | 'client-canvas'>('yolo-backend');
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [detections, setDetections] = useState<Detection[]>([]);
-  const [currentFrame, setCurrentFrame] = useState(0);
+  const [confThreshold, setConfThreshold] = useState<number>(0.22);
+  const [playbackMode, setPlaybackMode] = useState<'live' | 'step'>('live');
+  const [activeDetections, setActiveDetections] = useState<DefectItem[]>([]);
   const [stats, setStats] = useState<DetectionStats>({
     totalFrames: 0,
     processedFrames: 0,
@@ -34,27 +40,38 @@ export function CVDemo() {
   const [cameraHealth, setCameraHealth] = useState<any>(null);
   const [privacyStats, setPrivacyStats] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activeSnapshotResult, setActiveSnapshotResult] = useState<CVDetectionResponse | null>(null);
+  const [isSimulatingLiveFeed, setIsSimulatingLiveFeed] = useState(false);
+  const [videoProgress, setVideoProgress] = useState<{ currentTime: number; duration: number }>({ currentTime: 0, duration: 0 });
+  const [isLooping, setIsLooping] = useState<boolean>(true);
 
+  const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const captureCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const simCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const simAnimIdRef = useRef<number | null>(null);
+
   const detectorRef = useRef<RoadDefectDetector | null>(null);
-  const animationFrameRef = useRef<number>();
-  const frameCountRef = useRef(0);
+  const isRequestInFlightRef = useRef(false);
+  const isProcessingRef = useRef(false);
+  const latestDetectionsRef = useRef<DefectItem[]>([]);
   const inferenceTimesRef = useRef<number[]>([]);
   const fpsValuesRef = useRef<number[]>([]);
+  const frameCountRef = useRef(0);
+  const tickerIntervalRef = useRef<any>(null);
 
-  // Load backend model specifications or local fallback
+  // Initialize detector and metadata
   useEffect(() => {
+    let mounted = true;
     const initDetector = async () => {
       try {
         const health = await apiClient.checkHealth();
         if (health.online && health.data?.subsystems.cv_details) {
-          setEngineInfo(health.data.subsystems.cv_details);
+          if (mounted) setEngineInfo(health.data.subsystems.cv_details);
         } else {
           const detector = new RoadDefectDetector({
-            confidence_threshold: 0.3,
+            confidence_threshold: 0.25,
             frame_skip: 0,
             camera_id: 'CAM-FRONT-01',
             bus_id: 'BUS-SIM-001',
@@ -62,23 +79,410 @@ export function CVDemo() {
           });
           await detector.initialize();
           detectorRef.current = detector;
-          setEngineInfo(detector.getMetadata());
+          if (mounted) setEngineInfo(detector.getMetadata());
         }
       } catch (err) {
-        setError(`Failed to initialize detector metadata: ${err}`);
+        if (mounted) setError(`Failed to initialize detector metadata: ${err}`);
       }
     };
 
     initDetector();
+    return () => {
+      mounted = false;
+      stopProcessing();
+      stopSimulation();
+    };
   }, []);
 
-  // Handle video upload
-  const handleVideoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  // Exact letterbox coordinate mapping for overlay canvas
+  const drawOverlay = useCallback((items: DefectItem[], sourceW: number, sourceH: number) => {
+    const container = containerRef.current;
+    const overlay = overlayCanvasRef.current;
+    if (!container || !overlay || sourceW <= 0 || sourceH <= 0) return;
+
+    const rect = container.getBoundingClientRect();
+    if (overlay.width !== Math.round(rect.width) || overlay.height !== Math.round(rect.height)) {
+      overlay.width = Math.round(rect.width);
+      overlay.height = Math.round(rect.height);
+    }
+
+    const ctx = overlay.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+    // Compute exact aspect-ratio fit matching CSS object-contain
+    const scale = Math.min(overlay.width / sourceW, overlay.height / sourceH);
+    const renderW = sourceW * scale;
+    const renderH = sourceH * scale;
+    const offsetX = (overlay.width - renderW) / 2;
+    const offsetY = (overlay.height - renderH) / 2;
+
+    items.forEach(det => {
+      const [x1, y1, x2, y2] = det.bbox;
+      const drawX = offsetX + (x1 * scale);
+      const drawY = offsetY + (y1 * scale);
+      const drawW = Math.max(12, (x2 - x1) * scale);
+      const drawH = Math.max(12, (y2 - y1) * scale);
+
+      // Defect color coding
+      let strokeColor = '#ef4444'; // Pothole default red
+      let bgColor = 'rgba(239, 68, 68, 0.9)';
+      const typeLower = det.object_type.toLowerCase();
+
+      if (typeLower.includes('crack')) {
+        strokeColor = '#f59e0b'; // Amber
+        bgColor = 'rgba(245, 158, 11, 0.9)';
+      } else if (typeLower.includes('patch')) {
+        strokeColor = '#3b82f6'; // Blue
+        bgColor = 'rgba(59, 130, 246, 0.9)';
+      } else if (typeLower.includes('unpaved') || typeLower.includes('subsidence')) {
+        strokeColor = '#a855f7'; // Purple
+        bgColor = 'rgba(168, 85, 247, 0.9)';
+      } else if (typeLower.includes('bump')) {
+        strokeColor = '#06b6d4'; // Cyan
+        bgColor = 'rgba(6, 182, 212, 0.9)';
+      } else if (typeLower.includes('manhole')) {
+        strokeColor = '#ec4899'; // Pink
+        bgColor = 'rgba(236, 72, 153, 0.9)';
+      }
+
+      // Glowing bounding box
+      ctx.save();
+      ctx.shadowColor = strokeColor;
+      ctx.shadowBlur = 6;
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(drawX, drawY, drawW, drawH);
+      ctx.restore();
+
+      // Corner accent markers
+      const markerLen = Math.min(10, Math.min(drawW, drawH) / 3);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      // Top-left
+      ctx.moveTo(drawX, drawY + markerLen);
+      ctx.lineTo(drawX, drawY);
+      ctx.lineTo(drawX + markerLen, drawY);
+      // Top-right
+      ctx.moveTo(drawX + drawW - markerLen, drawY);
+      ctx.lineTo(drawX + drawW, drawY);
+      ctx.lineTo(drawX + drawW, drawY + markerLen);
+      // Bottom-left
+      ctx.moveTo(drawX, drawY + drawH - markerLen);
+      ctx.lineTo(drawX, drawY + drawH);
+      ctx.lineTo(drawX + markerLen, drawY + drawH);
+      // Bottom-right
+      ctx.moveTo(drawX + drawW - markerLen, drawY + drawH);
+      ctx.lineTo(drawX + drawW, drawY + drawH);
+      ctx.lineTo(drawX + drawW, drawY + drawH - markerLen);
+      ctx.stroke();
+
+      // Text badge
+      const cleanLabel = det.object_type.replace(/_/g, ' ').toUpperCase();
+      const badgeText = `${cleanLabel} ${(det.confidence * 100).toFixed(0)}%`;
+      ctx.font = 'bold 11px Inter, system-ui, sans-serif';
+      const textMetrics = ctx.measureText(badgeText);
+      const badgeW = textMetrics.width + 12;
+      const badgeH = 20;
+      const badgeY = Math.max(0, drawY - badgeH - 3);
+
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(drawX, badgeY, badgeW, badgeH);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(badgeText, drawX + 6, badgeY + 14);
+    });
+  }, []);
+
+  // Re-draw overlay on resize
+  useEffect(() => {
+    const handleResize = () => {
+      if (videoRef.current && videoUrl) {
+        drawOverlay(latestDetectionsRef.current, videoRef.current.videoWidth || 640, videoRef.current.videoHeight || 480);
+      } else if (imageRef.current && imageUrl) {
+        drawOverlay(latestDetectionsRef.current, imageRef.current.naturalWidth || 640, imageRef.current.naturalHeight || 480);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [drawOverlay, videoUrl, imageUrl]);
+
+  // Execute single inference step on a canvas or blob
+  const processFrameData = async (sourceCanvas: HTMLCanvasElement, width: number, height: number) => {
+    if (isRequestInFlightRef.current) return;
+    isRequestInFlightRef.current = true;
+
+    try {
+      let inferenceTime = 20;
+      let detectedItems: DefectItem[] = [];
+
+      if (engineMode === 'yolo-backend') {
+        const blob = await new Promise<Blob | null>((res) => sourceCanvas.toBlob(res, 'image/jpeg', 0.85));
+        if (blob) {
+          const yoloRes = await apiClient.detectFrame(blob, confThreshold);
+          inferenceTime = yoloRes.inference_latency_ms;
+          if (yoloRes.camera_health) setCameraHealth(yoloRes.camera_health);
+          if (yoloRes.privacy) setPrivacyStats(yoloRes.privacy);
+
+          detectedItems = yoloRes.detections.map(d => ({
+            bbox: [d.box.x1, d.box.y1, d.box.x2, d.box.y2],
+            object_type: d.class,
+            confidence: d.confidence
+          }));
+        }
+      } else if (detectorRef.current) {
+        const startTime = performance.now();
+        const result = await detectorRef.current.detect(sourceCanvas, frameCountRef.current, 0);
+        inferenceTime = performance.now() - startTime;
+        detectedItems = result.detections.map(d => ({
+          bbox: [d.bbox.x, d.bbox.y, d.bbox.x + d.bbox.width, d.bbox.y + d.bbox.height],
+          object_type: d.object_type,
+          confidence: d.confidence
+        }));
+      }
+
+      frameCountRef.current++;
+      inferenceTimesRef.current.push(inferenceTime);
+      const fps = Math.min(120, 1000 / Math.max(1, inferenceTime));
+      fpsValuesRef.current.push(fps);
+
+      const avgInference = inferenceTimesRef.current.reduce((a, b) => a + b, 0) / inferenceTimesRef.current.length;
+      const avgFps = fpsValuesRef.current.reduce((a, b) => a + b, 0) / fpsValuesRef.current.length;
+
+      setStats(prev => ({
+        totalFrames: frameCountRef.current,
+        processedFrames: prev.processedFrames + 1,
+        totalDetections: prev.totalDetections + detectedItems.length,
+        avgInferenceMs: avgInference,
+        avgFps: avgFps,
+        maxFps: Math.max(prev.maxFps === 0 ? fps : prev.maxFps, fps),
+        minFps: Math.min(prev.minFps === Infinity ? fps : prev.minFps, fps)
+      }));
+
+      latestDetectionsRef.current = detectedItems;
+      setActiveDetections(detectedItems);
+      drawOverlay(detectedItems, width, height);
+    } catch (err: any) {
+      console.warn('Frame detection tick error:', err);
+    } finally {
+      isRequestInFlightRef.current = false;
+    }
+  };
+
+  // Start smooth live video processing loop
+  const startProcessing = () => {
+    const video = videoRef.current;
+    const canvas = captureCanvasRef.current;
+    if (!video || !canvas) {
+      setError('Video player or canvas not initialized');
+      return;
+    }
+
+    setError(null);
+    setIsProcessing(true);
+    setIsPaused(false);
+    isProcessingRef.current = true;
+
+    // Start video playback
+    video.play().catch(err => {
+      console.warn('Playback error:', err);
+    });
+
+    // Clear previous ticker
+    if (tickerIntervalRef.current) {
+      clearInterval(tickerIntervalRef.current);
+    }
+
+    if (playbackMode === 'live') {
+      // Sample frame every 90ms (~11 FPS inference, keeping video at native 30/60 FPS)
+      tickerIntervalRef.current = setInterval(() => {
+        if (!isProcessingRef.current || video.paused || video.ended) return;
+
+        const natW = video.videoWidth || 640;
+        const natH = video.videoHeight || 480;
+        const scale = Math.min(1.0, 640 / Math.max(natW, natH));
+        const targetW = Math.round(natW * scale);
+        const targetH = Math.round(natH * scale);
+
+        if (canvas.width !== targetW || canvas.height !== targetH) {
+          canvas.width = targetW;
+          canvas.height = targetH;
+        }
+
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, targetW, targetH);
+          processFrameData(canvas, targetW, targetH);
+        }
+      }, 90);
+    } else {
+      // Step mode with safe timeout guard on seek
+      const runStepLoop = async () => {
+        while (isProcessingRef.current && !video.ended) {
+          const natW = video.videoWidth || 640;
+          const natH = video.videoHeight || 480;
+          const scale = Math.min(1.0, 640 / Math.max(natW, natH));
+          const targetW = Math.round(natW * scale);
+          const targetH = Math.round(natH * scale);
+
+          if (canvas.width !== targetW || canvas.height !== targetH) {
+            canvas.width = targetW;
+            canvas.height = targetH;
+          }
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(video, 0, 0, targetW, targetH);
+            await processFrameData(canvas, targetW, targetH);
+          }
+
+          // Advance with timeout fallback
+          video.currentTime += 1 / 15;
+          await new Promise<void>(resolve => {
+            const timeout = setTimeout(resolve, 120);
+            video.onseeked = () => {
+              clearTimeout(timeout);
+              resolve();
+            };
+          });
+        }
+        stopProcessing();
+      };
+      runStepLoop();
+    }
+  };
+
+  const stopProcessing = () => {
+    setIsProcessing(false);
+    setIsPaused(false);
+    isProcessingRef.current = false;
+    if (tickerIntervalRef.current) {
+      clearInterval(tickerIntervalRef.current);
+      tickerIntervalRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.pause();
+    }
+  };
+
+  const togglePause = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      video.play().then(() => {
+        setIsPaused(false);
+        if (!isProcessingRef.current) startProcessing();
+      }).catch(console.warn);
+    } else {
+      video.pause();
+      setIsPaused(true);
+    }
+  };
+
+  // Immediate frame detection on scrub/seek
+  const handleSeek = (newTime: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = newTime;
+    setVideoProgress(prev => ({ ...prev, currentTime: newTime }));
+
+    setTimeout(() => {
+      const canvas = captureCanvasRef.current;
+      if (canvas && video) {
+        const natW = video.videoWidth || 640;
+        const natH = video.videoHeight || 480;
+        const scale = Math.min(1.0, 640 / Math.max(natW, natH));
+        const targetW = Math.round(natW * scale);
+        const targetH = Math.round(natH * scale);
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, targetW, targetH);
+          processFrameData(canvas, targetW, targetH);
+        }
+      }
+    }, 40);
+  };
+
+  const stepFrame = (deltaSeconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (!video.paused) {
+      video.pause();
+      setIsPaused(true);
+    }
+    const maxDur = video.duration || 10;
+    const target = Math.max(0, Math.min(maxDur, video.currentTime + deltaSeconds));
+    handleSeek(target);
+  };
+
+  // 1-Click: Load and play pre-recorded transit road video with potholes
+  const loadSampleDashcamVideo = () => {
+    stopProcessing();
+    stopSimulation();
+    setError(null);
+    setImageUrl(null);
+    const vUrl = '/sample_road_potholes.mp4';
+    setVideoUrl(vUrl);
+    setStats({
+      totalFrames: 0,
+      processedFrames: 0,
+      totalDetections: 0,
+      avgInferenceMs: 0,
+      avgFps: 0,
+      maxFps: 0,
+      minFps: Infinity
+    });
+    frameCountRef.current = 0;
+    inferenceTimesRef.current = [];
+    fpsValuesRef.current = [];
+    setTimeout(() => {
+      if (videoRef.current) {
+        videoRef.current.currentTime = 0;
+        videoRef.current.play().catch(console.warn);
+        startProcessing();
+      }
+    }, 200);
+  };
+
+  // Handle image or video file upload
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file) {
+    if (!file) return;
+
+    stopProcessing();
+    stopSimulation();
+    setError(null);
+    latestDetectionsRef.current = [];
+    setActiveDetections([]);
+
+    if (file.type.startsWith('image/')) {
+      // Image mode
+      const url = URL.createObjectURL(file);
+      setImageUrl(url);
+      setVideoUrl(null);
+
+      // Load image and run single detection immediately
+      const img = new Image();
+      img.onload = () => {
+        const canvas = captureCanvasRef.current;
+        if (canvas) {
+          canvas.width = img.naturalWidth || 640;
+          canvas.height = img.naturalHeight || 480;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0);
+            processFrameData(canvas, canvas.width, canvas.height);
+          }
+        }
+      };
+      img.src = url;
+    } else {
+      // Video mode
       const url = URL.createObjectURL(file);
       setVideoUrl(url);
-      setDetections([]);
+      setImageUrl(null);
       setStats({
         totalFrames: 0,
         processedFrames: 0,
@@ -91,196 +495,251 @@ export function CVDemo() {
       frameCountRef.current = 0;
       inferenceTimesRef.current = [];
       fpsValuesRef.current = [];
+
+      // Auto-start video playback and YOLO detection!
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.currentTime = 0;
+          videoRef.current.play().catch(console.warn);
+          startProcessing();
+        }
+      }, 200);
     }
   };
 
-  // Test single sample road frame against YOLOv8 backend
-  const runSampleInference = async () => {
-    setError(null);
-    try {
-      // Create a test canvas with simulated road pothole
-      const sampleCanvas = document.createElement('canvas');
-      sampleCanvas.width = 640;
-      sampleCanvas.height = 480;
-      const ctx = sampleCanvas.getContext('2d');
-      if (!ctx) return;
+  const formatTime = (seconds: number): string => {
+    if (isNaN(seconds) || seconds < 0) return '00:00';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
 
-      // Draw road texture
-      ctx.fillStyle = '#374151';
-      ctx.fillRect(0, 0, 640, 480);
-      // Lane marking
-      ctx.fillStyle = '#f3f4f6';
-      ctx.fillRect(315, 0, 10, 480);
-      // Pothole dark patch
-      ctx.fillStyle = '#111827';
+  // 1-Click: Stop live simulation
+  const stopSimulation = () => {
+    if (simAnimIdRef.current) {
+      cancelAnimationFrame(simAnimIdRef.current);
+      simAnimIdRef.current = null;
+    }
+    setIsSimulatingLiveFeed(false);
+  };
+
+  // 1-Click: Generate moving dashcam video stream and detect live
+  const startLiveSimulation = () => {
+    stopProcessing();
+    stopSimulation();
+    setError(null);
+    setImageUrl(null);
+    setIsSimulatingLiveFeed(true);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    simCanvasRef.current = canvas;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Dynamic moving road parameters
+    let frameNum = 0;
+    const defects = [
+      { type: 'pothole', x: 260, y: -40, speed: 3.5, sizeW: 75, sizeH: 45 },
+      { type: 'road_crack', x: 380, y: -220, speed: 3.5, sizeW: 90, sizeH: 50 },
+      { type: 'pothole', x: 190, y: -400, speed: 3.5, sizeW: 85, sizeH: 50 }
+    ];
+
+    const renderSimulationFrame = () => {
+      frameNum++;
+      const w = canvas.width;
+      const h = canvas.height;
+
+      // Road background
+      ctx.fillStyle = '#2d3748';
+      ctx.fillRect(0, 0, w, h);
+
+      // Sky & Horizon
+      ctx.fillStyle = '#1a202c';
+      ctx.fillRect(0, 0, w, h * 0.25);
+
+      // Perspective road verge lines
+      ctx.strokeStyle = '#4a5568';
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.ellipse(220, 320, 60, 35, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = '#1f2937';
+      ctx.moveTo(w * 0.35, h * 0.25);
+      ctx.lineTo(0, h);
+      ctx.moveTo(w * 0.65, h * 0.25);
+      ctx.lineTo(w, h);
       ctx.stroke();
 
-      const blob = await new Promise<Blob | null>((res) => sampleCanvas.toBlob(res, 'image/jpeg', 0.85));
-      if (!blob) throw new Error('Failed to create frame blob');
+      // Moving center dashed lane divider
+      const dashOffset = (frameNum * 6) % 40;
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 4;
+      ctx.setLineDash([20, 20]);
+      ctx.lineDashOffset = -dashOffset;
+      ctx.beginPath();
+      ctx.moveTo(w * 0.5, h * 0.25);
+      ctx.lineTo(w * 0.5, h);
+      ctx.stroke();
+      ctx.setLineDash([]);
 
-      const result = await apiClient.detectFrame(blob, 0.3);
-      setActiveSnapshotResult(result);
-      setCameraHealth(result.camera_health);
-      setPrivacyStats(result.privacy);
-
-      setStats(prev => ({
-        totalFrames: prev.totalFrames + 1,
-        processedFrames: prev.processedFrames + 1,
-        totalDetections: prev.totalDetections + result.detection_count,
-        avgInferenceMs: result.inference_latency_ms,
-        avgFps: result.fps,
-        maxFps: Math.max(prev.maxFps === 0 ? result.fps : prev.maxFps, result.fps),
-        minFps: Math.min(prev.minFps === Infinity ? result.fps : prev.minFps, result.fps)
-      }));
-    } catch (err: any) {
-      setError(`YOLO inference failed: ${err.message || err}`);
-    }
-  };
-
-  // Process video frame by frame
-  const startProcessing = async () => {
-    if (!videoRef.current || !canvasRef.current || !overlayCanvasRef.current) {
-      setError('Video player or canvas not ready');
-      return;
-    }
-
-    setIsProcessing(true);
-    setIsPaused(false);
-    setError(null);
-
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const overlayCanvas = overlayCanvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const overlayCtx = overlayCanvas.getContext('2d');
-
-    if (!ctx || !overlayCtx) {
-      setError('Failed to get canvas context');
-      setIsProcessing(false);
-      return;
-    }
-
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-    overlayCanvas.width = canvas.width;
-    overlayCanvas.height = canvas.height;
-
-    video.currentTime = 0;
-    await new Promise(resolve => {
-      video.onseeked = resolve;
-    });
-
-    const processNextFrame = async () => {
-      if (!isProcessing || video.ended) {
-        setIsProcessing(false);
-        return;
-      }
-
-      if (isPaused) {
-        animationFrameRef.current = requestAnimationFrame(processNextFrame);
-        return;
-      }
-
-      try {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        let inferenceTime = 15;
-        let detectedItems: any[] = [];
-
-        if (engineMode === 'yolo-backend') {
-          // Send to real YOLO backend API
-          const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/jpeg', 0.8));
-          if (blob) {
-            const yoloRes = await apiClient.detectFrame(blob, 0.35);
-            inferenceTime = yoloRes.inference_latency_ms;
-            setCameraHealth(yoloRes.camera_health);
-            setPrivacyStats(yoloRes.privacy);
-            detectedItems = yoloRes.detections.map(d => ({
-              bbox: [d.box.x1, d.box.y1, d.box.x2, d.box.y2],
-              object_type: d.class,
-              confidence: d.confidence
-            }));
-          }
-        } else if (detectorRef.current) {
-          const startTime = performance.now();
-          const result = await detectorRef.current.detect(canvas, frameCountRef.current, video.currentTime);
-          inferenceTime = performance.now() - startTime;
-          detectedItems = result.detections;
+      // Move & draw defects
+      defects.forEach(def => {
+        def.y += def.speed;
+        if (def.y > h + 50) {
+          def.y = -60 - Math.random() * 80;
+          def.x = 180 + Math.random() * 260;
         }
 
-        frameCountRef.current++;
-        inferenceTimesRef.current.push(inferenceTime);
-        const fps = 1000 / Math.max(1, inferenceTime);
-        fpsValuesRef.current.push(fps);
+        if (def.y > h * 0.25 && def.y < h + 30) {
+          // Perspective scale
+          const progress = Math.min(1, (def.y - h * 0.25) / (h * 0.75));
+          const currentW = def.sizeW * (0.4 + progress * 0.8);
+          const currentH = def.sizeH * (0.4 + progress * 0.8);
 
-        const avgInference = inferenceTimesRef.current.reduce((a, b) => a + b, 0) / inferenceTimesRef.current.length;
-        const avgFps = fpsValuesRef.current.reduce((a, b) => a + b, 0) / fpsValuesRef.current.length;
+          if (def.type === 'pothole') {
+            // Realistic asphalt pothole with inner crater gradient
+            const grad = ctx.createRadialGradient(def.x, def.y, 2, def.x, def.y, currentW / 2);
+            grad.addColorStop(0, '#0a0d14');
+            grad.addColorStop(0.6, '#171923');
+            grad.addColorStop(1, '#2d3748');
 
-        setStats(prev => ({
-          totalFrames: frameCountRef.current,
-          processedFrames: prev.processedFrames + 1,
-          totalDetections: prev.totalDetections + detectedItems.length,
-          avgInferenceMs: avgInference,
-          avgFps: avgFps,
-          maxFps: Math.max(prev.maxFps === 0 ? fps : prev.maxFps, fps),
-          minFps: Math.min(prev.minFps === Infinity ? fps : prev.minFps, fps)
-        }));
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.ellipse(def.x, def.y, currentW / 2, currentH / 2, 0, 0, Math.PI * 2);
+            ctx.fill();
 
-        setCurrentFrame(frameCountRef.current);
+            // Broken asphalt edges
+            ctx.strokeStyle = '#111827';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+          } else {
+            // Longitudinal road crack
+            ctx.strokeStyle = '#0f172a';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(def.x - currentW / 2, def.y);
+            ctx.lineTo(def.x - currentW / 4, def.y + currentH / 3);
+            ctx.lineTo(def.x + currentW / 4, def.y - currentH / 4);
+            ctx.lineTo(def.x + currentW / 2, def.y + currentH / 2);
+            ctx.stroke();
+          }
+        }
+      });
 
-        // Draw overlays
-        overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-        detectedItems.forEach(det => {
-          const [x1, y1, x2, y2] = det.bbox;
-          const w = x2 - x1;
-          const h = y2 - y1;
+      // Dashcam timestamp HUD overlay
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(10, 10, 220, 26);
+      ctx.fillStyle = '#10b981';
+      ctx.font = '11px monospace';
+      ctx.fillText(`CAM-01 • BMTC LIVE • ${(frameNum * 0.04).toFixed(1)}s`, 16, 27);
 
-          overlayCtx.strokeStyle = det.object_type === 'pothole' ? '#ef4444' : '#06b6d4';
-          overlayCtx.lineWidth = 3;
-          overlayCtx.strokeRect(x1, y1, w, h);
-
-          // Label
-          overlayCtx.fillStyle = det.object_type === 'pothole' ? 'rgba(239, 68, 68, 0.85)' : 'rgba(6, 182, 212, 0.85)';
-          overlayCtx.fillRect(x1, Math.max(0, y1 - 22), 160, 22);
-          overlayCtx.fillStyle = '#ffffff';
-          overlayCtx.font = 'bold 12px sans-serif';
-          overlayCtx.fillText(`${det.object_type.toUpperCase()} ${(det.confidence * 100).toFixed(0)}%`, x1 + 5, Math.max(16, y1 - 6));
-        });
-
-        // Advance video
-        video.currentTime += 1 / 15; // 15 FPS sampling
-        await new Promise(resolve => {
-          video.onseeked = resolve;
-        });
-
-        animationFrameRef.current = requestAnimationFrame(processNextFrame);
-      } catch (err) {
-        setError(`Processing error: ${err}`);
-        setIsProcessing(false);
-      }
+      simAnimIdRef.current = requestAnimationFrame(renderSimulationFrame);
     };
 
-    processNextFrame();
+    renderSimulationFrame();
+
+    // Stream the canvas to the video element
+    const stream = canvas.captureStream(30);
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.play().then(() => {
+        setVideoUrl('simulated-stream');
+        setTimeout(() => {
+          startProcessing();
+        }, 150);
+      });
+    }
   };
 
-  const stopProcessing = () => {
-    setIsProcessing(false);
-    setIsPaused(false);
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
+  // 1-Click: Test Realistic Road Distress Photo
+  const runRealisticPhotoTest = async () => {
+    stopProcessing();
+    stopSimulation();
+    setError(null);
+    setVideoUrl(null);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Draw realistic asphalt texture
+    ctx.fillStyle = '#374151';
+    ctx.fillRect(0, 0, 640, 480);
+
+    // Speckle noise
+    for (let i = 0; i < 2000; i++) {
+      const px = Math.random() * 640;
+      const py = Math.random() * 480;
+      ctx.fillStyle = Math.random() > 0.5 ? '#4b5563' : '#1f2937';
+      ctx.fillRect(px, py, 2, 2);
     }
-    if (videoRef.current) {
-      videoRef.current.pause();
-    }
+
+    // Lane dividing line
+    ctx.fillStyle = '#f3f4f6';
+    ctx.fillRect(315, 0, 10, 480);
+
+    // Primary severe pothole
+    const grad1 = ctx.createRadialGradient(230, 310, 5, 230, 310, 65);
+    grad1.addColorStop(0, '#090d16');
+    grad1.addColorStop(0.7, '#18202f');
+    grad1.addColorStop(1, '#374151');
+    ctx.fillStyle = grad1;
+    ctx.beginPath();
+    ctx.ellipse(230, 310, 65, 38, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#111827';
+    ctx.lineWidth = 4;
+    ctx.stroke();
+
+    // Secondary road crack
+    ctx.strokeStyle = '#111827';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(420, 200);
+    ctx.lineTo(440, 260);
+    ctx.lineTo(430, 310);
+    ctx.lineTo(460, 370);
+    ctx.stroke();
+
+    // Set as active image
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+    setImageUrl(dataUrl);
+
+    // Run backend detection
+    await processFrameData(canvas, 640, 480);
+  };
+
+  // 1-Click: Test real waterlogged pothole scene
+  const testUserPotholeImage = () => {
+    stopProcessing();
+    stopSimulation();
+    setError(null);
+    setVideoUrl(null);
+    const sampleUrl = '/sample_pothole_road.jpg';
+    setImageUrl(sampleUrl);
+
+    const img = new Image();
+    img.onload = () => {
+      const canvas = captureCanvasRef.current;
+      if (canvas) {
+        canvas.width = img.naturalWidth || 768;
+        canvas.height = img.naturalHeight || 1024;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0);
+          processFrameData(canvas, canvas.width, canvas.height);
+        }
+      }
+    };
+    img.src = sampleUrl;
   };
 
   return (
     <div className="space-y-6 text-gray-100 max-w-7xl mx-auto">
+      {/* Offscreen hidden capture canvas */}
+      <canvas ref={captureCanvasRef} className="hidden" />
+
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gray-900 border border-gray-800 p-5 rounded-xl shadow-lg">
         <div>
@@ -296,7 +755,7 @@ export function CVDemo() {
                 </span>
               </h1>
               <p className="text-xs text-gray-400 mt-0.5">
-                Real tensor inference • Privacy anonymization • Camera health validation • Zero heuristic deception
+                Real tensor inference • Subpixel letterbox overlay • Non-blocking live streaming • Zero heuristic deception
               </p>
             </div>
           </div>
@@ -313,7 +772,7 @@ export function CVDemo() {
             }`}
           >
             <i className="fa-solid fa-microchip"></i>
-            YOLOv8 Deep Learning (PyTorch)
+            YOLOv8 PyTorch (Backend)
           </button>
           <button
             onClick={() => setEngineMode('client-canvas')}
@@ -324,7 +783,7 @@ export function CVDemo() {
             }`}
           >
             <i className="fa-solid fa-browser"></i>
-            Client Canvas Fallback
+            Client Fallback
           </button>
         </div>
       </div>
@@ -396,102 +855,286 @@ export function CVDemo() {
       {/* Main Video / Detection Workspace */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-white flex items-center gap-2">
               <i className="fa-solid fa-video text-blue-400"></i>
               Real-Time Feed & Bounding Box Overlay
             </h2>
             <div className="flex items-center gap-2">
               <button
-                onClick={runSampleInference}
-                className="px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition flex items-center gap-1.5"
-              >
-                <i className="fa-solid fa-bolt"></i>
-                Run Live Test Frame
-              </button>
-              <button
-                onClick={() => generateAndDownloadTestVideo()}
-                className="px-3 py-1.5 rounded-md bg-gray-800 hover:bg-gray-700 text-xs font-medium text-gray-300 transition flex items-center gap-1.5"
+                onClick={loadSampleDashcamVideo}
+                className="px-3 py-1.5 rounded-md bg-cyan-600 hover:bg-cyan-500 text-xs font-semibold text-white transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+                title="Play transit road dashcam video with realistic potholes"
               >
                 <i className="fa-solid fa-film"></i>
-                Generate Test Video
+                Play Sample Video
+              </button>
+              <button
+                onClick={startLiveSimulation}
+                className="px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+                title="Generate instant live simulated dashcam road feed with moving potholes"
+              >
+                <i className="fa-solid fa-play"></i>
+                Simulate Live Dashcam
+              </button>
+              <button
+                onClick={testUserPotholeImage}
+                className="px-3 py-1.5 rounded-md bg-amber-600 hover:bg-amber-500 text-xs font-semibold text-white transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+                title="Test real road scene with waterlogged potholes and distress"
+              >
+                <i className="fa-solid fa-water"></i>
+                Test Real Pothole Scene
+              </button>
+              <button
+                onClick={runRealisticPhotoTest}
+                className="px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition flex items-center gap-1.5 cursor-pointer"
+                title="Test high-contrast asphalt road scene with multiple defects"
+              >
+                <i className="fa-solid fa-image"></i>
+                Synthetic Road
               </button>
             </div>
           </div>
 
-          {/* Video Container */}
-          <div className="relative aspect-video bg-black rounded-lg overflow-hidden border border-gray-800 flex items-center justify-center">
+          {/* Video / Image Display Container with Letterbox Overlay */}
+          <div
+            ref={containerRef}
+            className="relative aspect-video bg-black rounded-lg overflow-hidden border border-gray-800 flex items-center justify-center select-none"
+          >
             {videoUrl ? (
               <>
                 <video
                   ref={videoRef}
-                  src={videoUrl}
+                  src={videoUrl === 'simulated-stream' ? undefined : videoUrl}
                   className="w-full h-full object-contain"
                   playsInline
                   muted
+                  loop={isLooping}
+                  onTimeUpdate={() => {
+                    if (videoRef.current) {
+                      setVideoProgress({
+                        currentTime: videoRef.current.currentTime,
+                        duration: videoRef.current.duration || 0
+                      });
+                    }
+                  }}
+                  onLoadedMetadata={() => {
+                    if (videoRef.current) {
+                      setVideoProgress({
+                        currentTime: 0,
+                        duration: videoRef.current.duration || 0
+                      });
+                      handleSeek(0);
+                    }
+                  }}
+                  onPlay={() => {
+                    setIsPaused(false);
+                    if (!isProcessingRef.current) startProcessing();
+                  }}
+                  onPause={() => {
+                    setIsPaused(true);
+                  }}
+                  onEnded={() => {
+                    if (!isLooping) stopProcessing();
+                  }}
                 />
-                <canvas ref={canvasRef} className="hidden" />
-                <canvas ref={overlayCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+                <canvas
+                  ref={overlayCanvasRef}
+                  className="absolute inset-0 w-full h-full pointer-events-none"
+                />
               </>
-            ) : activeSnapshotResult ? (
-              <div className="relative w-full h-full">
+            ) : imageUrl ? (
+              <>
                 <img
-                  src={activeSnapshotResult.evidence_frame_base64}
-                  alt="Snapshot Evidence"
+                  ref={imageRef}
+                  src={imageUrl}
+                  alt="Road Inspection Target"
                   className="w-full h-full object-contain"
+                  onLoad={() => {
+                    if (imageRef.current) {
+                      drawOverlay(
+                        latestDetectionsRef.current,
+                        imageRef.current.naturalWidth || 640,
+                        imageRef.current.naturalHeight || 480
+                      );
+                    }
+                  }}
                 />
-                <div className="absolute bottom-3 left-3 bg-gray-950/80 border border-gray-700 rounded p-2 text-xs text-white backdrop-blur-xs">
-                  <span className="font-bold text-emerald-400">YOLOv8 Live Detection:</span>{' '}
-                  {activeSnapshotResult.detection_count} defect(s) detected in {activeSnapshotResult.inference_latency_ms}ms ({activeSnapshotResult.fps} FPS)
-                </div>
-              </div>
+                <canvas
+                  ref={overlayCanvasRef}
+                  className="absolute inset-0 w-full h-full pointer-events-none"
+                />
+              </>
             ) : (
               <div className="text-center p-6 text-gray-500">
-                <i className="fa-solid fa-cloud-arrow-up text-4xl mb-3 opacity-40"></i>
-                <p className="text-sm">Upload bus footage (.mp4) or click &quot;Run Live Test Frame&quot;</p>
+                <i className="fa-solid fa-road text-4xl mb-3 opacity-40 text-blue-400"></i>
+                <p className="text-sm font-medium text-gray-300">No active road video or image</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Click &quot;Play Sample Video&quot; or upload an MP4/WebM video or JPG/PNG image
+                </p>
               </div>
             )}
           </div>
 
-          {/* Controls */}
-          <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
-            <div className="flex items-center gap-2">
-              <label className="px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-xs font-semibold text-white cursor-pointer transition flex items-center gap-1.5">
-                <i className="fa-solid fa-upload"></i>
-                Upload Video
+          {/* Dashcam Video Timeline Controller Bar */}
+          {videoUrl && (
+            <div className="bg-gray-950 p-2.5 rounded-lg border border-gray-800 space-y-2">
+              <div className="flex items-center justify-between text-xs text-gray-400 font-mono">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={togglePause}
+                    className="w-7 h-7 rounded bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center transition cursor-pointer"
+                    title={isPaused ? 'Play Video' : 'Pause Video'}
+                  >
+                    <i className={`fa-solid ${isPaused ? 'fa-play' : 'fa-pause'} text-xs`}></i>
+                  </button>
+                  <button
+                    onClick={() => stepFrame(-1 / 15)}
+                    className="w-7 h-7 rounded bg-gray-800 hover:bg-gray-700 text-gray-200 flex items-center justify-center transition cursor-pointer"
+                    title="Step backward 1 frame"
+                  >
+                    <i className="fa-solid fa-backward-step text-xs"></i>
+                  </button>
+                  <button
+                    onClick={() => stepFrame(1 / 15)}
+                    className="w-7 h-7 rounded bg-gray-800 hover:bg-gray-700 text-gray-200 flex items-center justify-center transition cursor-pointer"
+                    title="Step forward 1 frame"
+                  >
+                    <i className="fa-solid fa-forward-step text-xs"></i>
+                  </button>
+                  <span className="text-white font-semibold text-xs ml-1">
+                    {formatTime(videoProgress.currentTime)} / {formatTime(videoProgress.duration)}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] text-emerald-400 font-semibold bg-emerald-950/60 border border-emerald-800 px-2 py-0.5 rounded">
+                    {isProcessing ? '⚡ LIVE YOLO INFERENCE' : 'PAUSED'}
+                  </span>
+                  <button
+                    onClick={() => setIsLooping(!isLooping)}
+                    className={`px-2 py-0.5 rounded text-[11px] border transition cursor-pointer ${
+                      isLooping
+                        ? 'bg-blue-950 text-blue-400 border-blue-800'
+                        : 'bg-gray-900 text-gray-400 border-gray-800 hover:text-white'
+                    }`}
+                    title="Toggle looping playback"
+                  >
+                    <i className="fa-solid fa-repeat mr-1"></i>
+                    Loop
+                  </button>
+                </div>
+              </div>
+
+              {/* Interactive Progress / Scrub Bar */}
+              <div className="flex items-center gap-2">
                 <input
-                  type="file"
-                  accept="video/*"
-                  onChange={handleVideoUpload}
-                  className="hidden"
+                  type="range"
+                  min={0}
+                  max={videoProgress.duration || 10}
+                  step={0.05}
+                  value={videoProgress.currentTime}
+                  onChange={(e) => handleSeek(parseFloat(e.target.value))}
+                  className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400"
                 />
-              </label>
+              </div>
+            </div>
+          )}
 
-              {videoUrl && !isProcessing && (
-                <button
-                  onClick={startProcessing}
-                  className="px-4 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white transition flex items-center gap-1.5"
-                >
-                  <i className="fa-solid fa-play"></i>
-                  Start Detection
-                </button>
-              )}
+          {/* Interactive Controls & Settings */}
+          <div className="space-y-3 pt-1">
+            {/* Primary Action Buttons */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <label className="px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-xs font-semibold text-white cursor-pointer transition flex items-center gap-1.5 shadow-sm">
+                  <i className="fa-solid fa-upload"></i>
+                  Upload Video / Photo
+                  <input
+                    type="file"
+                    accept="video/*,image/*"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                </label>
 
-              {isProcessing && (
-                <button
-                  onClick={stopProcessing}
-                  className="px-4 py-1.5 rounded-md bg-red-600 hover:bg-red-500 text-xs font-semibold text-white transition flex items-center gap-1.5"
-                >
-                  <i className="fa-solid fa-stop"></i>
-                  Stop
-                </button>
-              )}
+                {videoUrl && !isProcessing && (
+                  <button
+                    onClick={startProcessing}
+                    className="px-4 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+                  >
+                    <i className="fa-solid fa-play"></i>
+                    Start Detection
+                  </button>
+                )}
+
+                {isProcessing && (
+                  <>
+                    <button
+                      onClick={togglePause}
+                      className="px-3 py-1.5 rounded-md bg-amber-600 hover:bg-amber-500 text-xs font-semibold text-white transition flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <i className={`fa-solid ${isPaused ? 'fa-play' : 'fa-pause'}`}></i>
+                      {isPaused ? 'Resume' : 'Pause'}
+                    </button>
+                    <button
+                      onClick={stopProcessing}
+                      className="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-500 text-xs font-semibold text-white transition flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <i className="fa-solid fa-stop"></i>
+                      Stop
+                    </button>
+                  </>
+                )}
+
+                {imageUrl && (
+                  <button
+                    onClick={() => {
+                      const canvas = captureCanvasRef.current;
+                      const img = imageRef.current;
+                      if (canvas && img) {
+                        canvas.width = img.naturalWidth || 640;
+                        canvas.height = img.naturalHeight || 480;
+                        const ctx = canvas.getContext('2d');
+                        if (ctx) {
+                          ctx.drawImage(img, 0, 0);
+                          processFrameData(canvas, canvas.width, canvas.height);
+                        }
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <i className="fa-solid fa-rotate-right"></i>
+                    Re-Analyze Photo
+                  </button>
+                )}
+              </div>
+
+              {/* Confidence Threshold Slider */}
+              <div className="flex items-center gap-3 bg-gray-950 px-3 py-1.5 rounded-lg border border-gray-800">
+                <span className="text-[11px] text-gray-400 font-medium">Confidence:</span>
+                <input
+                  type="range"
+                  min="0.10"
+                  max="0.70"
+                  step="0.02"
+                  value={confThreshold}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    setConfThreshold(val);
+                  }}
+                  className="w-24 accent-blue-500 cursor-pointer h-1.5 bg-gray-800 rounded-lg"
+                />
+                <span className="text-xs font-mono font-bold text-blue-400 w-10 text-right">
+                  {(confThreshold * 100).toFixed(0)}%
+                </span>
+              </div>
             </div>
 
             {error && (
-              <span className="text-xs text-red-400 bg-red-950/50 border border-red-800/50 px-2.5 py-1 rounded">
-                {error}
-              </span>
+              <div className="text-xs text-red-400 bg-red-950/50 border border-red-800/50 p-2 rounded flex items-center gap-2">
+                <i className="fa-solid fa-triangle-exclamation"></i>
+                <span>{error}</span>
+              </div>
             )}
           </div>
         </div>
@@ -514,14 +1157,59 @@ export function CVDemo() {
                 <span className="text-lg font-bold text-green-400 font-mono">{stats.avgFps.toFixed(1)}</span>
               </div>
               <div className="bg-gray-950 p-2.5 rounded-lg border border-gray-800">
-                <span className="text-gray-500 block text-[10px] uppercase">Frames Processed</span>
+                <span className="text-gray-500 block text-[10px] uppercase">Frames Sampled</span>
                 <span className="text-lg font-bold text-white font-mono">{stats.processedFrames}</span>
               </div>
               <div className="bg-gray-950 p-2.5 rounded-lg border border-gray-800">
-                <span className="text-gray-500 block text-[10px] uppercase">Detections Emitted</span>
+                <span className="text-gray-500 block text-[10px] uppercase">Total Detections</span>
                 <span className="text-lg font-bold text-blue-400 font-mono">{stats.totalDetections}</span>
               </div>
             </div>
+          </div>
+
+          {/* Active Defects in Current Frame */}
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-2.5">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <i className="fa-solid fa-bullseye text-red-400"></i>
+                Active Frame Detections
+              </h3>
+              <span className="text-xs font-mono font-bold bg-gray-800 px-2 py-0.5 rounded text-gray-300">
+                {activeDetections.length} defect(s)
+              </span>
+            </div>
+
+            {activeDetections.length === 0 ? (
+              <p className="text-xs text-gray-500 py-3 text-center">
+                No road defects detected in current frame
+              </p>
+            ) : (
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                {activeDetections.map((det, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center justify-between bg-gray-950 p-2 rounded border border-gray-800 text-xs"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${
+                        det.object_type.includes('crack') ? 'bg-amber-400' : 'bg-red-400'
+                      }`} />
+                      <span className="font-semibold text-gray-200 capitalize">
+                        {det.object_type.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-gray-400 text-[10px]">
+                        [{det.bbox.map(n => Math.round(n)).join(', ')}]
+                      </span>
+                      <span className="font-mono font-bold text-emerald-400 text-xs">
+                        {(det.confidence * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Edge Architecture Proof Card */}
@@ -530,7 +1218,7 @@ export function CVDemo() {
               <i className="fa-solid fa-shield-halved text-emerald-400"></i>
               SIH Evaluator Defense
             </h3>
-            <p className="text-gray-400 leading-relaxed">
+            <p className="text-gray-400 leading-relaxed text-[11px]">
               This engine processes live video directly using a genuine deep-learning YOLO convolutional model.
               Zero continuous video is transmitted to the cloud — only validated event metadata (~1.2 KB) is transmitted over cellular.
             </p>

@@ -1,5 +1,7 @@
 {
-  "name": "sandbox-workspace",
+  "name": "urbanpulse",
+  "description": "UrbanPulse — AI-Powered Mobile Urban Intelligence Platform for Public Transport Fleets (BEL × SIH26124)",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {

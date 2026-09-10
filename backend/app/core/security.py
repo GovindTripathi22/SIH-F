@@ -8,6 +8,8 @@ import bcrypt
 from jose import jwt, JWTError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorizationCredentials
+import secrets
+import os
 import logging
 
 from app.config import settings
@@ -27,45 +29,53 @@ class Role:
     FIELD_ENGINEER = "FIELD_ENGINEER"
     VIEWER = "VIEWER"
 
-# Standard seeded user accounts
+# Standard seeded user accounts (passwords overridable via environment variables in production)
+ADMIN_PWD = os.getenv("URBANPULSE_ADMIN_PASSWORD", "Admin@BEL2026")
+OPERATOR_PWD = os.getenv("URBANPULSE_OPERATOR_PASSWORD", "Operator@BMTC2026")
+TRAFFIC_PWD = os.getenv("URBANPULSE_TRAFFIC_PASSWORD", "Traffic@BTP2026")
+PWD_ENG_PWD = os.getenv("URBANPULSE_PWD_PASSWORD", "PWD@BBMP2026")
+FIELD_PWD = os.getenv("URBANPULSE_FIELD_PASSWORD", "Field@BBMP2026")
+VIEWER_PWD = os.getenv("URBANPULSE_VIEWER_PASSWORD", "Viewer@Public2026")
+
 PRECONFIGURED_USERS: Dict[str, Dict[str, any]] = {
     "admin@urbanpulse.bel": {
         "username": "admin@urbanpulse.bel",
         "full_name": "Chief Municipal Architect",
         "role": Role.ADMIN,
-        "password_hash": bcrypt.hashpw("Admin@BEL2026".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        "password_hash": bcrypt.hashpw(ADMIN_PWD.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     },
     "operator@bmtc.gov.in": {
         "username": "operator@bmtc.gov.in",
         "full_name": "BMTC Fleet Controller",
         "role": Role.TRANSPORT_OPERATOR,
-        "password_hash": bcrypt.hashpw("Operator@BMTC2026".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        "password_hash": bcrypt.hashpw(OPERATOR_PWD.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     },
     "traffic@bengaluru.police.gov.in": {
         "username": "traffic@bengaluru.police.gov.in",
         "full_name": "BTP Traffic Inspector",
         "role": Role.TRAFFIC_AUTHORITY,
-        "password_hash": bcrypt.hashpw("Traffic@BTP2026".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        "password_hash": bcrypt.hashpw(TRAFFIC_PWD.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     },
     "engineer@bbmp.gov.in": {
         "username": "engineer@bbmp.gov.in",
         "full_name": "BBMP Road Maintenance Exec",
         "role": Role.PWD_ENGINEER,
-        "password_hash": bcrypt.hashpw("PWD@BBMP2026".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        "password_hash": bcrypt.hashpw(PWD_ENG_PWD.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     },
     "field@bbmp.gov.in": {
         "username": "field@bbmp.gov.in",
         "full_name": "BBMP Ward 150 Field Crew",
         "role": Role.FIELD_ENGINEER,
-        "password_hash": bcrypt.hashpw("Field@BBMP2026".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        "password_hash": bcrypt.hashpw(FIELD_PWD.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     },
     "viewer@public.gov.in": {
         "username": "viewer@public.gov.in",
         "full_name": "Civic Oversight Observer",
         "role": Role.VIEWER,
-        "password_hash": bcrypt.hashpw("Viewer@Public2026".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        "password_hash": bcrypt.hashpw(VIEWER_PWD.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     }
 }
+
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -169,8 +179,8 @@ async def get_event_ingestion_auth(
         return {"auth_type": "bearer", "user": username, "role": role}
 
     if x_edge_device_key is not None:
-        expected_key = getattr(settings, "EDGE_DEVICE_API_KEY", "urbanpulse-edge-bus-telemetry-key-2026")
-        if x_edge_device_key == expected_key:
+        expected_key = getattr(settings, "EDGE_DEVICE_API_KEY", "")
+        if secrets.compare_digest(x_edge_device_key, expected_key):
             return {"auth_type": "edge_key", "user": "edge-bus-hardware", "role": Role.TRANSPORT_OPERATOR}
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

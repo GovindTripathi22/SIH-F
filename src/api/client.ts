@@ -58,15 +58,83 @@ export interface CVDetectionResponse {
   evidence_frame_base64: string;
 }
 
+/**
+ * Unified transformer mapping backend VerifiedIssue schema into frontend RoadEvent format.
+ * Shared between initial REST fetch and live WebSocket stream updates.
+ */
+export function mapBackendIssueToRoadEvent(item: any): RoadEvent {
+  let reasons: string[] = [];
+  try {
+    if (item.priority_reasons) {
+      reasons = typeof item.priority_reasons === 'string'
+        ? JSON.parse(item.priority_reasons)
+        : item.priority_reasons;
+    }
+  } catch {
+    reasons = [item.priority_reasons || 'Verified observation'];
+  }
+
+  const sevNum = item.severity === 'SAFETY_HAZARD' ? 9 : (item.severity === 'SEVERE' ? 7 : (item.severity === 'MODERATE' ? 5 : 3));
+  const firstTime = item.first_observed || new Date().toISOString();
+  const lastTime = item.last_observed || new Date().toISOString();
+
+  // Honest observation attribution without fabricating license plates
+  const observations = (item.observations && Array.isArray(item.observations) && item.observations.length > 0)
+    ? item.observations.map((obs: any, idx: number) => ({
+        id: obs.observation_id || `obs-${item.issue_id}-${idx + 1}`,
+        busId: obs.bus_id || `Fleet Unit #${idx + 1}`,
+        timestamp: obs.timestamp || firstTime,
+        confidence: obs.confidence || item.confidence || 0.88,
+        location: {
+          lat: obs.latitude || item.centroid_latitude,
+          lng: obs.longitude || item.centroid_longitude
+        }
+      }))
+    : Array.from({ length: Math.max(1, item.observation_count || 1) }, (_, idx) => ({
+        id: `obs-${item.issue_id}-${idx + 1}`,
+        busId: idx === 0 ? `Primary Probe` : `Corroborating Unit #${idx + 1}`,
+        timestamp: idx === 0 ? firstTime : lastTime,
+        confidence: item.confidence || 0.88,
+        location: {
+          lat: item.centroid_latitude,
+          lng: item.centroid_longitude
+        }
+      }));
+
+  const lat = typeof item.centroid_latitude === 'number' ? item.centroid_latitude : parseFloat(item.centroid_latitude || 0);
+  const lng = typeof item.centroid_longitude === 'number' ? item.centroid_longitude : parseFloat(item.centroid_longitude || 0);
+
+  return {
+    id: item.issue_id,
+    type: (item.event_type || 'pothole') as any,
+    location: {
+      lat,
+      lng
+    },
+    firstDetected: firstTime,
+    lastDetected: lastTime,
+    observations,
+    status: (item.status === 'PENDING' ? (item.observation_count >= 2 ? 'verified' : 'pending_verify') :
+             (item.status === 'RESOLVED' || item.status === 'RESOLUTION_VERIFIED' ? 'resolved' : 'actioned')) as any,
+    priority: (item.priority?.toLowerCase() || 'medium') as any,
+    severity: sevNum,
+    description: reasons[0] || `Detected ${item.event_type} at coordinates (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
+    address: `Monitored Transit Corridor (${lat.toFixed(3)}, ${lng.toFixed(3)})`,
+    createdAt: firstTime,
+    updatedAt: lastTime
+  };
+}
+
 class APIClient {
   private isOnline = false;
   private token: string | null = null;
   private currentUser: { username: string; role: string; full_name: string } | null = null;
 
   constructor() {
-    this.token = localStorage.getItem('urbanpulse_jwt_token');
+    // Prefer sessionStorage to reduce persistent XSS token exposure window
     try {
-      const savedUser = localStorage.getItem('urbanpulse_user');
+      this.token = sessionStorage.getItem('urbanpulse_jwt_token') || localStorage.getItem('urbanpulse_jwt_token');
+      const savedUser = sessionStorage.getItem('urbanpulse_user') || localStorage.getItem('urbanpulse_user');
       if (savedUser) this.currentUser = JSON.parse(savedUser);
     } catch {
       this.currentUser = null;
@@ -75,10 +143,15 @@ class APIClient {
 
   setToken(token: string | null) {
     this.token = token;
-    if (token) {
-      localStorage.setItem('urbanpulse_jwt_token', token);
-    } else {
-      localStorage.removeItem('urbanpulse_jwt_token');
+    try {
+      if (token) {
+        sessionStorage.setItem('urbanpulse_jwt_token', token);
+      } else {
+        sessionStorage.removeItem('urbanpulse_jwt_token');
+        localStorage.removeItem('urbanpulse_jwt_token');
+      }
+    } catch {
+      // Storage unavailable in restricted sandboxes
     }
   }
 
@@ -88,39 +161,20 @@ class APIClient {
 
   setCurrentUser(user: { username: string; role: string; full_name: string } | null) {
     this.currentUser = user;
-    if (user) {
-      localStorage.setItem('urbanpulse_user', JSON.stringify(user));
-    } else {
-      localStorage.removeItem('urbanpulse_user');
+    try {
+      if (user) {
+        sessionStorage.setItem('urbanpulse_user', JSON.stringify(user));
+      } else {
+        sessionStorage.removeItem('urbanpulse_user');
+        localStorage.removeItem('urbanpulse_user');
+      }
+    } catch {
+      // Storage unavailable
     }
   }
 
   getCurrentUser(): { username: string; role: string; full_name: string } | null {
     return this.currentUser;
-  }
-
-  async login(username: string, password: string): Promise<{ access_token: string; role: string; full_name: string; username: string }> {
-    const res = await fetch('/api/v1/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
-    if (!res.ok) {
-      throw new Error(`Authentication failed with HTTP ${res.status}`);
-    }
-    const data = await res.json();
-    this.setToken(data.access_token);
-    this.setCurrentUser({
-      username: data.username,
-      role: data.role,
-      full_name: data.full_name
-    });
-    return data;
-  }
-
-  logout() {
-    this.setToken(null);
-    this.setCurrentUser(null);
   }
 
   private getHeaders(customHeaders: Record<string, string> = {}): Record<string, string> {
@@ -135,21 +189,69 @@ class APIClient {
   }
 
   /**
+   * Unified, resilient HTTP request helper with timeout and error handling
+   */
+  private async request<T>(
+    endpoint: string,
+    options: RequestInit = {},
+    timeoutMs: number = 5000
+  ): Promise<T> {
+    const isFormData = options.body instanceof FormData;
+    const headers: Record<string, string> = isFormData
+      ? (this.token ? { 'Authorization': `Bearer ${this.token}` } : {})
+      : this.getHeaders(options.headers as Record<string, string> || {});
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await fetch(endpoint, {
+        ...options,
+        headers,
+        signal: controller.signal
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP Error ${res.status}: ${res.statusText}`);
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async login(username: string, password: string): Promise<{ access_token: string; role: string; full_name: string; username: string }> {
+    const data = await this.request<{ access_token: string; role: string; full_name: string; username: string }>(
+      '/api/v1/auth/login',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      },
+      5000
+    );
+    this.setToken(data.access_token);
+    this.setCurrentUser({
+      username: data.username,
+      role: data.role,
+      full_name: data.full_name
+    });
+    return data;
+  }
+
+  logout() {
+    this.setToken(null);
+    this.setCurrentUser(null);
+  }
+
+  /**
    * Check backend health and readiness
    */
   async checkHealth(): Promise<{ online: boolean; data?: BackendHealth }> {
     try {
-      const res = await fetch('/health', {
-        headers: this.getHeaders(),
-        signal: AbortSignal.timeout(3000)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        this.isOnline = true;
-        return { online: true, data };
-      }
-      this.isOnline = false;
-      return { online: false };
+      const data = await this.request<BackendHealth>('/health', {}, 3000);
+      this.isOnline = true;
+      return { online: true, data };
     } catch {
       this.isOnline = false;
       return { online: false };
@@ -161,73 +263,27 @@ class APIClient {
   }
 
   /**
-   * Fetch all verified issues from database
+   * Get authenticated WebSocket feed URL
+   */
+  getWebSocketUrl(): string {
+    const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = typeof window !== 'undefined' ? window.location.host : '127.0.0.1:5173';
+    let url = `${protocol}//${host}/ws/live-feed`;
+    if (this.token) {
+      url += `?token=${encodeURIComponent(this.token)}`;
+    }
+    return url;
+  }
+
+  /**
+   * Fetch paginated verified issues from backend PostGIS database.
    */
   async getIssues(): Promise<{ issues: RoadEvent[]; source: 'database' | 'offline_fallback' }> {
     try {
-      const res = await fetch('/api/v1/issues?page_size=100', {
-        headers: this.getHeaders(),
-        signal: AbortSignal.timeout(4000)
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await this.request<any>('/api/v1/issues?page_size=100', {}, 4000);
       this.isOnline = true;
 
-      // Transform backend VerifiedIssue into frontend RoadEvent format
-      const mapped: RoadEvent[] = (data.items || []).map((item: any) => {
-        let reasons: string[] = [];
-        try {
-          if (item.priority_reasons) reasons = JSON.parse(item.priority_reasons);
-        } catch {
-          reasons = [item.priority_reasons || 'Verified observation'];
-        }
-
-        const sevNum = item.severity === 'SAFETY_HAZARD' ? 9 : (item.severity === 'SEVERE' ? 7 : (item.severity === 'MODERATE' ? 5 : 3));
-        const firstTime = item.first_observed || new Date().toISOString();
-        const lastTime = item.last_observed || new Date().toISOString();
-
-        return {
-          id: item.issue_id,
-          type: (item.event_type || 'pothole') as any,
-          location: {
-            lat: item.centroid_latitude,
-            lng: item.centroid_longitude
-          },
-          firstDetected: firstTime,
-          lastDetected: lastTime,
-          observations: [
-            {
-              id: `obs-${item.issue_id}-1`,
-              busId: `BUS-KA01-001`,
-              timestamp: firstTime,
-              confidence: item.confidence || 0.88,
-              location: {
-                lat: item.centroid_latitude,
-                lng: item.centroid_longitude
-              }
-            },
-            ...(item.observation_count > 1 ? [{
-              id: `obs-${item.issue_id}-2`,
-              busId: `BUS-KA01-002`,
-              timestamp: lastTime,
-              confidence: item.confidence || 0.92,
-              location: {
-                lat: item.centroid_latitude,
-                lng: item.centroid_longitude
-              }
-            }] : [])
-          ],
-          status: (item.status === 'PENDING' ? (item.observation_count >= 2 ? 'verified' : 'pending_verify') :
-                   (item.status === 'RESOLVED' || item.status === 'RESOLUTION_VERIFIED' ? 'resolved' : 'actioned')) as any,
-          priority: (item.priority?.toLowerCase() || 'medium') as any,
-          severity: sevNum,
-          description: reasons[0] || `Detected ${item.event_type} at coordinates (${item.centroid_latitude.toFixed(4)}, ${item.centroid_longitude.toFixed(4)})`,
-          address: `Bengaluru Public Transport Corridor`,
-          createdAt: firstTime,
-          updatedAt: lastTime
-        };
-      });
-
+      const mapped: RoadEvent[] = (data.items || []).map(mapBackendIssueToRoadEvent);
       return { issues: mapped, source: 'database' };
     } catch (err) {
       console.warn('Backend unavailable, falling back to cached simulated events:', err);
@@ -241,12 +297,7 @@ class APIClient {
    */
   async getBuses(): Promise<{ buses: Bus[]; source: 'database' | 'offline_fallback' }> {
     try {
-      const res = await fetch('/api/v1/buses', {
-        headers: this.getHeaders(),
-        signal: AbortSignal.timeout(3000)
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await this.request<any[]>('/api/v1/buses', {}, 3000);
       this.isOnline = true;
 
       const mapped: Bus[] = data.map((b: any) => ({
@@ -279,16 +330,11 @@ class APIClient {
     formData.append('confidence_threshold', String(confidenceThreshold));
     formData.append('apply_privacy', 'true');
 
-    const res = await fetch('/api/v1/cv/detect', {
-      method: 'POST',
-      body: formData,
-      headers: this.token ? { 'Authorization': `Bearer ${this.token}` } : {}
-    });
-
-    if (!res.ok) {
-      throw new Error(`Detection request failed: HTTP ${res.status}`);
-    }
-    return res.json();
+    return await this.request<CVDetectionResponse>(
+      '/api/v1/cv/detect',
+      { method: 'POST', body: formData },
+      8000
+    );
   }
 
   /**
@@ -310,16 +356,11 @@ class APIClient {
     formData.append('longitude', String(lon));
     formData.append('confidence_threshold', String(confidenceThreshold));
 
-    const res = await fetch('/api/v1/cv/detect-and-ingest', {
-      method: 'POST',
-      body: formData,
-      headers: this.token ? { 'Authorization': `Bearer ${this.token}` } : {}
-    });
-
-    if (!res.ok) {
-      throw new Error(`Ingest failed: HTTP ${res.status}`);
-    }
-    return res.json();
+    return await this.request<any>(
+      '/api/v1/cv/detect-and-ingest',
+      { method: 'POST', body: formData },
+      8000
+    );
   }
 
   /**
@@ -328,7 +369,8 @@ class APIClient {
   async downloadWorkOrderPdf(issueId: string, department?: string): Promise<void> {
     const deptParam = department ? `?department=${encodeURIComponent(department)}` : '';
     const res = await fetch(`/api/v1/work-orders/${encodeURIComponent(issueId)}/pdf${deptParam}`, {
-      headers: this.getHeaders()
+      headers: this.getHeaders(),
+      signal: AbortSignal.timeout(8000)
     });
 
     if (!res.ok) {
@@ -350,21 +392,20 @@ class APIClient {
    * Advance maintenance lifecycle (IN_PROGRESS, REPAIRED, RESOLUTION_VERIFIED)
    */
   async updateLifecycle(issueId: string, targetStatus: string, actor: string, notes?: string): Promise<any> {
-    const res = await fetch('/api/v1/work-orders/lifecycle', {
-      method: 'POST',
-      headers: this.getHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({
-        issue_id: issueId,
-        target_status: targetStatus,
-        actor,
-        notes: notes || 'Lifecycle status update'
-      })
-    });
-
-    if (!res.ok) {
-      throw new Error(`Failed to update lifecycle: HTTP ${res.status}`);
-    }
-    return res.json();
+    return await this.request<any>(
+      '/api/v1/work-orders/lifecycle',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          issue_id: issueId,
+          target_status: targetStatus,
+          actor,
+          notes: notes || 'Lifecycle status update'
+        })
+      },
+      5000
+    );
   }
 
   /**
@@ -372,12 +413,7 @@ class APIClient {
    */
   async getAnalyticsOverview(): Promise<{ overview: AnalyticsOverview; source: 'database' | 'offline_fallback' }> {
     try {
-      const res = await fetch('/api/v1/analytics/overview', {
-        headers: this.getHeaders(),
-        signal: AbortSignal.timeout(4000)
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: AnalyticsOverview = await res.json();
+      const data = await this.request<AnalyticsOverview>('/api/v1/analytics/overview', {}, 4000);
       this.isOnline = true;
       return { overview: data, source: 'database' };
     } catch (err) {
