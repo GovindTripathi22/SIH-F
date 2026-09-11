@@ -106,6 +106,8 @@ class EventService:
         issue, is_new = await self.clustering_engine.ingest_event_into_cluster(event)
         event.processed = True
         await self.db.flush()
+        if issue:
+            await self.db.refresh(issue)
 
         logger.info(
             f"Processed event {event.event_id}: mapped to issue {issue.issue_id} "

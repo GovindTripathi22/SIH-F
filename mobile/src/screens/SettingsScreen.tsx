@@ -31,15 +31,15 @@ export const SettingsScreen: React.FC<Props> = ({
   const [edgeKey, setEdgeKey] = useState(MobileAPI.getEdgeKey());
   const [testStatus, setTestStatus] = useState<string>('');
 
-  const handleSave = () => {
-    MobileAPI.setBaseUrl(serverUrl);
-    MobileAPI.setEdgeKey(edgeKey);
-    setTestStatus('Settings saved successfully');
+  const handleSave = async () => {
+    await MobileAPI.setBaseUrl(serverUrl);
+    await MobileAPI.setEdgeKey(edgeKey);
+    setTestStatus('Settings saved securely to device storage');
   };
 
   const handleTestConnection = async () => {
     setTestStatus('Testing connection to backend...');
-    MobileAPI.setBaseUrl(serverUrl);
+    await MobileAPI.setBaseUrl(serverUrl);
     const health = await MobileAPI.checkHealth();
     if (health.online) {
       setTestStatus(`✅ Connected: UrbanPulse API v${health.data?.version || '1.0'}`);
@@ -72,11 +72,11 @@ export const SettingsScreen: React.FC<Props> = ({
           style={styles.input}
           value={edgeKey}
           onChangeText={setEdgeKey}
-          placeholder="edge_k8s_prod_key_77a94f"
+          placeholder="Enter Edge Device API Key (Required)"
           placeholderTextColor="#64748b"
           autoCapitalize="none"
         />
-        <Text style={styles.hint}>Grants 300 req/min edge headroom without IP NAT collision</Text>
+        <Text style={styles.hint}>Grants edge rate-limiting headroom. Must be configured per vehicle unit.</Text>
       </View>
 
       <View style={styles.formGroup}>

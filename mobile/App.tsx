@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, createContext, useContext } from 'react';
 import {
   SafeAreaView,
   StyleSheet,
@@ -6,7 +6,11 @@ import {
   Text,
   TouchableOpacity,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { NavigationContainer } from '@react-navigation/native';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { LiveScanScreen } from './src/screens/LiveScanScreen';
 import { HistoryScreen } from './src/screens/HistoryScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
@@ -14,102 +18,181 @@ import { LoginScreen } from './src/screens/LoginScreen';
 import { UserSession } from './src/types';
 import { MobileAPI } from './src/services/api';
 
-type Tab = 'SCAN' | 'HISTORY' | 'SETTINGS' | 'ACCOUNT';
+interface DeviceConfigContextType {
+  busId: string;
+  setBusId: (id: string) => void;
+  routeId: string;
+  setRouteId: (id: string) => void;
+  cameraId: string;
+  setCameraId: (id: string) => void;
+}
+
+export const DeviceConfigContext = createContext<DeviceConfigContextType>({
+  busId: 'bus-01',
+  setBusId: () => {},
+  routeId: 'route-1',
+  setRouteId: () => {},
+  cameraId: 'cam-01-fwd',
+  setCameraId: () => {},
+});
+
+const Tab = createBottomTabNavigator();
+
+function DashcamTabScreen({ navigation }: any) {
+  const { busId, routeId, cameraId } = useContext(DeviceConfigContext);
+  return (
+    <LiveScanScreen
+      busId={busId}
+      routeId={routeId}
+      cameraId={cameraId}
+      onNavigateToHistory={() => navigation.navigate('Queue')}
+    />
+  );
+}
+
+function ConfigTabScreen() {
+  const { busId, setBusId, routeId, setRouteId, cameraId, setCameraId } =
+    useContext(DeviceConfigContext);
+  return (
+    <SettingsScreen
+      busId={busId}
+      setBusId={setBusId}
+      routeId={routeId}
+      setRouteId={setRouteId}
+      cameraId={cameraId}
+      setCameraId={setCameraId}
+    />
+  );
+}
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('SCAN');
   const [session, setSession] = useState<UserSession | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
 
   // Sensor identity state
   const [busId, setBusId] = useState('bus-01');
   const [routeId, setRouteId] = useState('route-1');
   const [cameraId, setCameraId] = useState('cam-01-fwd');
 
+  useEffect(() => {
+    async function restoreSession() {
+      try {
+        const initResult = await MobileAPI.init();
+        if (initResult.session) {
+          setSession(initResult.session);
+        } else if (initResult.token) {
+          setSession({
+            token: initResult.token,
+            username: 'operator@bmtc.gov.in',
+            role: 'TRANSPORT_OPERATOR',
+            fullName: 'BMTC Transit Operator',
+          });
+        }
+      } catch (err) {
+        console.warn('Session restoration failed:', err);
+      } finally {
+        setIsInitializing(false);
+      }
+    }
+    restoreSession();
+  }, []);
+
+  if (isInitializing) {
+    return (
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.loadingContainer}>
+          <StatusBar barStyle="light-content" backgroundColor="#0a0f1d" />
+          <ActivityIndicator size="large" color="#38bdf8" />
+          <Text style={styles.loadingText}>Initializing Edge Dashcam...</Text>
+        </SafeAreaView>
+      </SafeAreaProvider>
+    );
+  }
+
   if (!session) {
     return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#0a0f1d" />
-        <LoginScreen onLoginSuccess={setSession} />
-      </SafeAreaView>
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.container}>
+          <StatusBar barStyle="light-content" backgroundColor="#0a0f1d" />
+          <LoginScreen onLoginSuccess={setSession} />
+        </SafeAreaView>
+      </SafeAreaProvider>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0a0f1d" />
+    <DeviceConfigContext.Provider
+      value={{
+        busId,
+        setBusId,
+        routeId,
+        setRouteId,
+        cameraId,
+        setCameraId,
+      }}
+    >
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.container}>
+          <StatusBar barStyle="light-content" backgroundColor="#0a0f1d" />
 
-      {/* App Top Bar */}
-      <View style={styles.topBar}>
-        <View>
-          <Text style={styles.appName}>UrbanPulse Edge</Text>
-          <Text style={styles.appUser}>
-            {session.fullName} ({session.role})
-          </Text>
-        </View>
-        <TouchableOpacity
-          style={styles.logoutButton}
-          onPress={() => {
-            MobileAPI.setToken(null);
-            setSession(null);
-          }}
-        >
-          <Text style={styles.logoutText}>DISCONNECT</Text>
-        </TouchableOpacity>
-      </View>
+          {/* App Top Bar */}
+          <View style={styles.topBar}>
+            <View>
+              <Text style={styles.appName}>UrbanPulse Edge</Text>
+              <Text style={styles.appUser}>
+                {session.fullName} ({session.role})
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.logoutButton}
+              onPress={async () => {
+                await MobileAPI.setToken(null);
+                setSession(null);
+              }}
+            >
+              <Text style={styles.logoutText}>DISCONNECT</Text>
+            </TouchableOpacity>
+          </View>
 
-      {/* Screen Content */}
-      <View style={styles.content}>
-        {activeTab === 'SCAN' && (
-          <LiveScanScreen
-            busId={busId}
-            routeId={routeId}
-            cameraId={cameraId}
-            onNavigateToHistory={() => setActiveTab('HISTORY')}
-          />
-        )}
-        {activeTab === 'HISTORY' && <HistoryScreen />}
-        {activeTab === 'SETTINGS' && (
-          <SettingsScreen
-            busId={busId}
-            setBusId={setBusId}
-            routeId={routeId}
-            setRouteId={setRouteId}
-            cameraId={cameraId}
-            setCameraId={setCameraId}
-          />
-        )}
-      </View>
+          {/* React Navigation Bottom Tab Navigator */}
+          <NavigationContainer>
+            <Tab.Navigator
+              screenOptions={{
+                headerShown: false,
+                tabBarStyle: styles.tabBar,
+                tabBarActiveTintColor: '#38bdf8',
+                tabBarInactiveTintColor: '#64748b',
+                tabBarLabelStyle: styles.tabLabel,
+              }}
+            >
+              <Tab.Screen
+                name="Dashcam"
+                component={DashcamTabScreen}
+                options={{
+                  tabBarLabel: '📹 DASHCAM',
+                }}
+              />
 
-      {/* Bottom Tab Bar */}
-      <View style={styles.tabBar}>
-        <TouchableOpacity
-          style={[styles.tabItem, activeTab === 'SCAN' && styles.tabItemActive]}
-          onPress={() => setActiveTab('SCAN')}
-        >
-          <Text style={[styles.tabLabel, activeTab === 'SCAN' && styles.tabLabelActive]}>
-            📹 DASHCAM
-          </Text>
-        </TouchableOpacity>
+              <Tab.Screen
+                name="Queue"
+                component={HistoryScreen}
+                options={{
+                  tabBarLabel: '📦 QUEUE',
+                }}
+              />
 
-        <TouchableOpacity
-          style={[styles.tabItem, activeTab === 'HISTORY' && styles.tabItemActive]}
-          onPress={() => setActiveTab('HISTORY')}
-        >
-          <Text style={[styles.tabLabel, activeTab === 'HISTORY' && styles.tabLabelActive]}>
-            📦 QUEUE
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.tabItem, activeTab === 'SETTINGS' && styles.tabItemActive]}
-          onPress={() => setActiveTab('SETTINGS')}
-        >
-          <Text style={[styles.tabLabel, activeTab === 'SETTINGS' && styles.tabLabelActive]}>
-            ⚙️ CONFIG
-          </Text>
-        </TouchableOpacity>
-      </View>
-    </SafeAreaView>
+              <Tab.Screen
+                name="Config"
+                component={ConfigTabScreen}
+                options={{
+                  tabBarLabel: '⚙️ CONFIG',
+                }}
+              />
+            </Tab.Navigator>
+          </NavigationContainer>
+        </SafeAreaView>
+      </SafeAreaProvider>
+    </DeviceConfigContext.Provider>
   );
 }
 
@@ -118,65 +201,60 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0a0f1d',
   },
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: '#0a0f1d',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: '#94a3b8',
+    marginTop: 12,
+    fontSize: 14,
+  },
   topBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: '#0e1321',
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#1e293b',
+    backgroundColor: '#0f172a',
   },
   appName: {
     color: '#38bdf8',
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: 'bold',
   },
   appUser: {
     color: '#94a3b8',
-    fontSize: 10,
+    fontSize: 11,
     marginTop: 1,
   },
   logoutButton: {
     backgroundColor: '#1e293b',
     paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingVertical: 6,
     borderRadius: 6,
     borderWidth: 1,
     borderColor: '#334155',
   },
   logoutText: {
     color: '#f43f5e',
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: 'bold',
   },
-  content: {
-    flex: 1,
-  },
   tabBar: {
-    flexDirection: 'row',
-    backgroundColor: '#0e1321',
+    backgroundColor: '#0f172a',
     borderTopWidth: 1,
     borderTopColor: '#1e293b',
-    paddingVertical: 10,
-    paddingBottom: 16,
-  },
-  tabItem: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 4,
-  },
-  tabItemActive: {
-    borderBottomWidth: 2,
-    borderBottomColor: '#38bdf8',
+    paddingBottom: 6,
+    paddingTop: 6,
+    height: 60,
   },
   tabLabel: {
-    color: '#64748b',
     fontSize: 11,
-    fontWeight: '600',
-  },
-  tabLabelActive: {
-    color: '#38bdf8',
+    fontWeight: 'bold',
   },
 });

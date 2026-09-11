@@ -6,13 +6,17 @@ import {
   TouchableOpacity,
   Dimensions,
   ActivityIndicator,
-  ScrollView,
 } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
+import * as Location from 'expo-location';
 import { MobileAPI } from '../services/api';
 import { OfflineQueue } from '../services/offlineQueue';
 import { CVDetectionResponse } from '../types';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const VIEWFINDER_WIDTH = SCREEN_WIDTH - 32;
+const VIEWFINDER_HEIGHT = 260;
 
 interface Props {
   busId: string;
@@ -27,22 +31,120 @@ export const LiveScanScreen: React.FC<Props> = ({
   cameraId,
   onNavigateToHistory,
 }) => {
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [locationPermission, setLocationPermission] = useState<boolean>(false);
   const [isScanning, setIsScanning] = useState(false);
   const [lastResult, setLastResult] = useState<CVDetectionResponse | null>(null);
   const [latencyMs, setLatencyMs] = useState<number>(0);
   const [fps, setFps] = useState<number>(0);
   const [cameraHealth, setCameraHealth] = useState<string>('NORMAL');
   const [pendingQueueCount, setPendingQueueCount] = useState<number>(0);
+  const [wsConnected, setWsConnected] = useState<boolean>(false);
+  const [wsNotification, setWsNotification] = useState<string>('');
+
   const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number }>({
     lat: 12.9352,
     lng: 77.6245,
-    accuracy: 2.4,
+    accuracy: 2.5,
   });
   const [statusMessage, setStatusMessage] = useState<string>('Dashcam Standby');
 
+  const cameraRef = useRef<CameraView>(null);
   const scanIntervalRef = useRef<any>(null);
+  const isProcessingRef = useRef<boolean>(false);
+  const locationSubRef = useRef<Location.LocationSubscription | null>(null);
 
-  // Update pending queue badge
+  // Mutable refs to prevent React stale closure bugs inside interval ticks
+  const coordsRef = useRef(coords);
+  const busIdRef = useRef(busId);
+  const routeIdRef = useRef(routeId);
+  const cameraIdRef = useRef(cameraId);
+  const isScanningRef = useRef(isScanning);
+
+  useEffect(() => {
+    coordsRef.current = coords;
+  }, [coords]);
+
+  useEffect(() => {
+    busIdRef.current = busId;
+    routeIdRef.current = routeId;
+    cameraIdRef.current = cameraId;
+  }, [busId, routeId, cameraId]);
+
+  useEffect(() => {
+    isScanningRef.current = isScanning;
+  }, [isScanning]);
+
+  // Initialize GPS Location tracking via expo-location
+  useEffect(() => {
+    let mounted = true;
+
+    async function initLocation() {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          if (mounted) {
+            setLocationPermission(false);
+            setStatusMessage('GPS Permission Denied: Operating with last fix');
+          }
+          return;
+        }
+
+        if (mounted) setLocationPermission(true);
+
+        // Fetch initial high-accuracy GPS fix
+        const initialLoc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        });
+
+        if (mounted && initialLoc?.coords) {
+          const fresh = {
+            lat: initialLoc.coords.latitude,
+            lng: initialLoc.coords.longitude,
+            accuracy: initialLoc.coords.accuracy ?? 3.0,
+          };
+          coordsRef.current = fresh;
+          setCoords(fresh);
+        }
+
+        // Start continuous GPS tracking along transit corridor
+        const sub = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 1000,
+            distanceInterval: 2,
+          },
+          (newLoc) => {
+            if (mounted && newLoc?.coords) {
+              const fresh = {
+                lat: newLoc.coords.latitude,
+                lng: newLoc.coords.longitude,
+                accuracy: newLoc.coords.accuracy ?? 2.5,
+              };
+              coordsRef.current = fresh;
+              setCoords(fresh);
+            }
+          }
+        );
+
+        locationSubRef.current = sub;
+      } catch (err) {
+        console.warn('Location initialization error:', err);
+      }
+    }
+
+    initLocation();
+
+    return () => {
+      mounted = false;
+      if (locationSubRef.current) {
+        locationSubRef.current.remove();
+        locationSubRef.current = null;
+      }
+    };
+  }, []);
+
+  // Update pending queue badge from SQLite
   useEffect(() => {
     const updateCount = () => setPendingQueueCount(OfflineQueue.getPendingCount());
     updateCount();
@@ -50,27 +152,89 @@ export const LiveScanScreen: React.FC<Props> = ({
     return () => clearInterval(timer);
   }, []);
 
-  // Frame simulation and edge ingest trigger
+  // Subscribe to live WebSocket feed for this route corridor
+  useEffect(() => {
+    const unsubscribe = MobileAPI.subscribeLiveFeed(
+      {
+        onOpen: () => setWsConnected(true),
+        onClose: () => setWsConnected(false),
+        onError: () => setWsConnected(false),
+        onMessage: (msg: any) => {
+          if (msg.type === 'issue_update') {
+            const issueId = msg.issue?.issue_id || msg.event_id || 'new';
+            setWsNotification(`📡 Live Corridor Alert: Issue ${issueId} verified`);
+            setTimeout(() => setWsNotification(''), 4000);
+          }
+        },
+      },
+      routeId
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, [routeId]);
+
+  // Genuine camera capture and edge inference pipeline
   const processEdgeFrame = async () => {
-    // Advance simulated GPS slightly along transit corridor
-    setCoords(prev => ({
-      lat: prev.lat + (Math.random() - 0.48) * 0.0003,
-      lng: prev.lng + (Math.random() - 0.48) * 0.0003,
-      accuracy: 2.0 + Math.random() * 0.8,
-    }));
+    // Prevent overlapping capture ticks if inference/network takes longer than 1s
+    if (isProcessingRef.current) {
+      return;
+    }
+    isProcessingRef.current = true;
 
     const startTime = Date.now();
+    let frameUri: string | null = null;
+    const currentGps = coordsRef.current;
+    const currentBus = busIdRef.current;
+    const currentRoute = routeIdRef.current;
+    const currentCam = cameraIdRef.current;
+
     try {
-      // 1x1 test pixel base64 jpeg for lightweight edge pipeline ping
-      const dummyJpegUri = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=';
+      if (!cameraPermission?.granted) {
+        setStatusMessage('Camera access required. Please enable camera.');
+        return;
+      }
+
+      // Capture genuine photo from phone camera
+      if (cameraRef.current) {
+        try {
+          const photo = await cameraRef.current.takePictureAsync({
+            quality: 0.7,
+            shutterSound: false,
+          });
+
+          if (photo?.uri) {
+            // Resize to 640px JPEG at 1 FPS interval for real-time edge processing
+            try {
+              const resized = await manipulateAsync(
+                photo.uri,
+                [{ resize: { width: 640 } }],
+                { compress: 0.7, format: SaveFormat.JPEG, base64: true }
+              );
+              frameUri = resized.uri;
+            } catch (manipErr) {
+              console.warn('Resize fallback to raw photo:', manipErr);
+              frameUri = photo.uri;
+            }
+          }
+        } catch (captureErr) {
+          console.warn('Camera capture error:', captureErr);
+        }
+      }
+
+      if (!frameUri) {
+        setStatusMessage('Waiting for camera sensor frame...');
+        return;
+      }
 
       const result = await MobileAPI.detectAndIngest({
-        imageUri: dummyJpegUri,
-        busId,
-        routeId,
-        cameraId,
-        latitude: coords.lat,
-        longitude: coords.lng,
+        imageUri: frameUri,
+        busId: currentBus,
+        routeId: currentRoute,
+        cameraId: currentCam,
+        latitude: currentGps.lat,
+        longitude: currentGps.lng,
       });
 
       const elapsed = Date.now() - startTime;
@@ -85,30 +249,46 @@ export const LiveScanScreen: React.FC<Props> = ({
         setStatusMessage('Clear corridor — no defects detected');
       }
     } catch (err: any) {
-      // Connection lost or slow: save into offline queue
-      OfflineQueue.enqueue({
-        busId,
-        routeId,
-        cameraId,
-        latitude: coords.lat,
-        longitude: coords.lng,
-        gpsAccuracy: coords.accuracy,
-        timestamp: new Date().toISOString(),
-        frameBase64: 'cached_frame_placeholder',
-      });
-      setPendingQueueCount(OfflineQueue.getPendingCount());
-      setStatusMessage('Network unavailable: Saved to offline queue');
+      // Network drop or edge disconnect: persist into durable SQLite offline queue
+      if (frameUri) {
+        OfflineQueue.enqueue({
+          busId: currentBus,
+          routeId: currentRoute,
+          cameraId: currentCam,
+          latitude: currentGps.lat,
+          longitude: currentGps.lng,
+          gpsAccuracy: currentGps.accuracy,
+          timestamp: new Date().toISOString(),
+          frameBase64: frameUri,
+        });
+        setPendingQueueCount(OfflineQueue.getPendingCount());
+        setStatusMessage(`Network dropped: Saved to SQLite queue (${err?.message || 'offline'})`);
+      } else {
+        setStatusMessage(`Edge error: ${err?.message || 'Scan failed'}`);
+      }
+    } finally {
+      isProcessingRef.current = false;
     }
   };
 
-  const toggleScanning = () => {
+  const toggleScanning = async () => {
     if (isScanning) {
-      if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+      if (scanIntervalRef.current) {
+        clearInterval(scanIntervalRef.current);
+        scanIntervalRef.current = null;
+      }
       setIsScanning(false);
       setStatusMessage('Dashcam Paused');
     } else {
+      if (!cameraPermission?.granted) {
+        const perm = await requestCameraPermission();
+        if (!perm.granted) {
+          setStatusMessage('Camera permission denied. Cannot start dashcam scan.');
+          return;
+        }
+      }
       setIsScanning(true);
-      setStatusMessage('Dashcam Active: 1 FPS Scanning');
+      setStatusMessage('Dashcam Active: 1 FPS Scanning (640px JPEG)');
       processEdgeFrame();
       scanIntervalRef.current = setInterval(processEdgeFrame, 1000);
     }
@@ -116,7 +296,10 @@ export const LiveScanScreen: React.FC<Props> = ({
 
   useEffect(() => {
     return () => {
-      if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+      if (scanIntervalRef.current) {
+        clearInterval(scanIntervalRef.current);
+        scanIntervalRef.current = null;
+      }
     };
   }, []);
 
@@ -128,46 +311,102 @@ export const LiveScanScreen: React.FC<Props> = ({
           <View style={[styles.badge, { backgroundColor: isScanning ? '#059669' : '#475569' }]}>
             <Text style={styles.badgeText}>{isScanning ? 'LIVE 1s' : 'STANDBY'}</Text>
           </View>
-          <View style={[styles.badge, { backgroundColor: cameraHealth === 'NORMAL' ? '#0284c7' : '#d97706' }]}>
+          <View
+            style={[
+              styles.badge,
+              { backgroundColor: cameraHealth === 'NORMAL' ? '#0284c7' : '#d97706' },
+            ]}
+          >
             <Text style={styles.badgeText}>CAM: {cameraHealth}</Text>
+          </View>
+          <View
+            style={[
+              styles.badge,
+              { backgroundColor: wsConnected ? '#10b981' : '#64748b' },
+            ]}
+          >
+            <Text style={styles.badgeText}>{wsConnected ? 'WS LIVE' : 'WS OFF'}</Text>
           </View>
         </View>
 
         <TouchableOpacity style={styles.queueBadge} onPress={onNavigateToHistory}>
-          <Text style={styles.queueBadgeText}>📦 Queue: {pendingQueueCount}</Text>
+          <Text style={styles.queueBadgeText}>📦 SQLite: {pendingQueueCount}</Text>
         </TouchableOpacity>
       </View>
 
       {/* Dashcam Viewfinder */}
       <View style={styles.viewfinder}>
-        <View style={styles.viewfinderOverlay}>
-          {/* Simulated HUD Crosshairs */}
-          <View style={styles.crosshair} />
-          
-          {/* Detection Bounding Boxes Overlay */}
-          {lastResult?.detections?.map((det, idx) => (
-            <View
-              key={idx}
-              style={[
-                styles.boundingBox,
-                {
-                  left: (det.box.x1 / 640) * (SCREEN_WIDTH - 32),
-                  top: (det.box.y1 / 480) * 240,
-                  width: Math.max(40, ((det.box.x2 - det.box.x1) / 640) * (SCREEN_WIDTH - 32)),
-                  height: Math.max(30, ((det.box.y2 - det.box.y1) / 480) * 240),
-                },
-              ]}
+        {cameraPermission?.granted ? (
+          <CameraView
+            ref={cameraRef}
+            style={StyleSheet.absoluteFill}
+            facing="back"
+          />
+        ) : (
+          <View style={styles.permissionContainer}>
+            <Text style={styles.permissionTitle}>Camera Access Needed</Text>
+            <Text style={styles.permissionSubtitle}>
+              Live scanning requires camera feed to detect road defects.
+            </Text>
+            <TouchableOpacity
+              style={styles.permissionButton}
+              onPress={requestCameraPermission}
             >
-              <Text style={styles.boxLabel}>
-                {det.class} {(det.confidence * 100).toFixed(0)}%
-              </Text>
-            </View>
-          ))}
+              <Text style={styles.permissionButtonText}>ENABLE CAMERA</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Viewfinder HUD Overlay */}
+        <View style={styles.viewfinderOverlay} pointerEvents="none">
+          {/* HUD Crosshairs */}
+          <View style={styles.crosshair} />
+
+          {/* Detection Bounding Boxes Overlay */}
+          {lastResult?.detections?.map((det, idx) => {
+            const left = (det.box.x1 / 640) * VIEWFINDER_WIDTH;
+            const top = (det.box.y1 / 480) * VIEWFINDER_HEIGHT;
+            const width = Math.max(
+              36,
+              ((det.box.x2 - det.box.x1) / 640) * VIEWFINDER_WIDTH
+            );
+            const height = Math.max(
+              24,
+              ((det.box.y2 - det.box.y1) / 480) * VIEWFINDER_HEIGHT
+            );
+
+            const isPothole = det.class.toLowerCase().includes('pothole');
+            const boxColor = isPothole ? '#f43f5e' : '#f59e0b';
+
+            return (
+              <View
+                key={idx}
+                style={[
+                  styles.boundingBox,
+                  {
+                    left,
+                    top,
+                    width,
+                    height,
+                    borderColor: boxColor,
+                    backgroundColor: isPothole
+                      ? 'rgba(244, 63, 94, 0.2)'
+                      : 'rgba(245, 158, 11, 0.2)',
+                  },
+                ]}
+              >
+                <Text style={[styles.boxLabel, { backgroundColor: boxColor }]}>
+                  {det.class} {(det.confidence * 100).toFixed(0)}%
+                </Text>
+              </View>
+            );
+          })}
 
           {/* Telemetry HUD */}
           <View style={styles.hudOverlay}>
             <Text style={styles.hudText}>
               GPS: {coords.lat.toFixed(5)}, {coords.lng.toFixed(5)} (±{coords.accuracy.toFixed(1)}m)
+              {locationPermission ? ' [HARDWARE]' : ' [CORRIDOR]'}
             </Text>
             <Text style={styles.hudText}>
               BUS: {busId} | RT: {routeId} | {fps.toFixed(0)} FPS ({latencyMs.toFixed(0)}ms)
@@ -176,15 +415,25 @@ export const LiveScanScreen: React.FC<Props> = ({
         </View>
       </View>
 
+      {/* WebSocket Live Notification Banner */}
+      {wsNotification ? (
+        <View style={styles.wsNotificationBanner}>
+          <Text style={styles.wsNotificationText}>{wsNotification}</Text>
+        </View>
+      ) : null}
+
       {/* Status Banner */}
       <View style={styles.statusBanner}>
         <Text style={styles.statusText}>{statusMessage}</Text>
       </View>
 
-      {/* Scan Control Button */}
+      {/* Scan Control Buttons */}
       <View style={styles.controls}>
         <TouchableOpacity
-          style={[styles.actionButton, { backgroundColor: isScanning ? '#dc2626' : '#0891b2' }]}
+          style={[
+            styles.actionButton,
+            { backgroundColor: isScanning ? '#dc2626' : '#0891b2' },
+          ]}
           onPress={toggleScanning}
         >
           <Text style={styles.actionButtonText}>
@@ -214,35 +463,35 @@ const styles = StyleSheet.create({
   },
   badgeGroup: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 6,
   },
   badge: {
-    paddingHorizontal: 8,
+    paddingHorizontal: 7,
     paddingVertical: 4,
     borderRadius: 6,
   },
   badgeText: {
     color: '#ffffff',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: 'bold',
     fontFamily: 'monospace',
   },
   queueBadge: {
     backgroundColor: '#1e293b',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#334155',
   },
   queueBadgeText: {
     color: '#38bdf8',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
   },
   viewfinder: {
     width: '100%',
-    height: 260,
+    height: VIEWFINDER_HEIGHT,
     backgroundColor: '#030712',
     borderRadius: 12,
     overflow: 'hidden',
@@ -250,36 +499,66 @@ const styles = StyleSheet.create({
     borderColor: '#1e293b',
     position: 'relative',
   },
-  viewfinderOverlay: {
+  permissionContainer: {
     flex: 1,
-    position: 'relative',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#0f172a',
+  },
+  permissionTitle: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 6,
+  },
+  permissionSubtitle: {
+    color: '#94a3b8',
+    fontSize: 12,
+    textAlign: 'center',
+    marginBottom: 14,
+  },
+  permissionButton: {
+    backgroundColor: '#0284c7',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  permissionButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  viewfinderOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
   crosshair: {
     position: 'absolute',
     left: '50%',
     top: '50%',
-    width: 20,
-    height: 20,
-    marginLeft: -10,
-    marginTop: -10,
+    width: 24,
+    height: 24,
+    marginLeft: -12,
+    marginTop: -12,
     borderWidth: 1,
     borderColor: 'rgba(56, 189, 248, 0.4)',
-    borderRadius: 10,
+    borderRadius: 12,
   },
   boundingBox: {
     position: 'absolute',
     borderWidth: 2,
-    borderColor: '#f43f5e',
-    backgroundColor: 'rgba(244, 63, 94, 0.15)',
     borderRadius: 4,
   },
   boxLabel: {
     position: 'absolute',
     top: -16,
     left: -2,
-    backgroundColor: '#f43f5e',
     color: '#ffffff',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: 'bold',
     paddingHorizontal: 4,
     borderRadius: 2,
@@ -289,7 +568,7 @@ const styles = StyleSheet.create({
     bottom: 8,
     left: 8,
     right: 8,
-    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
     padding: 6,
     borderRadius: 6,
   },
@@ -298,11 +577,25 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: 'monospace',
   },
+  wsNotificationBanner: {
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    borderColor: '#10b981',
+    borderWidth: 1,
+    padding: 8,
+    borderRadius: 8,
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  wsNotificationText: {
+    color: '#34d399',
+    fontSize: 11,
+    fontWeight: '600',
+  },
   statusBanner: {
     backgroundColor: '#0f172a',
     padding: 10,
     borderRadius: 8,
-    marginTop: 12,
+    marginTop: 10,
     borderWidth: 1,
     borderColor: '#1e293b',
     alignItems: 'center',
@@ -313,16 +606,13 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   controls: {
-    marginTop: 16,
+    marginTop: 14,
     gap: 10,
   },
   actionButton: {
     paddingVertical: 14,
     borderRadius: 10,
     alignItems: 'center',
-    shadowColor: '#0891b2',
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
     elevation: 4,
   },
   actionButtonText: {

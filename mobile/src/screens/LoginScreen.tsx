@@ -17,6 +17,7 @@ interface Props {
 export const LoginScreen: React.FC<Props> = ({ onLoginSuccess }) => {
   const [username, setUsername] = useState('operator@bmtc.gov.in');
   const [password, setPassword] = useState('Operator@BMTC2026');
+  const [edgeKey, setEdgeKey] = useState(MobileAPI.getEdgeKey() || '');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -24,7 +25,7 @@ export const LoginScreen: React.FC<Props> = ({ onLoginSuccess }) => {
     setIsLoading(true);
     setErrorMessage('');
     try {
-      const session = await MobileAPI.login(username, password);
+      const session = await MobileAPI.login(username, password, edgeKey);
       onLoginSuccess(session);
     } catch (err: any) {
       setErrorMessage(err.message || 'Login failed');
@@ -33,9 +34,10 @@ export const LoginScreen: React.FC<Props> = ({ onLoginSuccess }) => {
     }
   };
 
-  const selectDemoAccount = (u: string, p: string) => {
+  const selectDemoAccount = (u: string, p: string, key?: string) => {
     setUsername(u);
     setPassword(p);
+    if (key) setEdgeKey(key);
   };
 
   return (
@@ -62,6 +64,16 @@ export const LoginScreen: React.FC<Props> = ({ onLoginSuccess }) => {
           value={password}
           onChangeText={setPassword}
           secureTextEntry
+          placeholderTextColor="#64748b"
+        />
+
+        <Text style={styles.label}>Edge Device Key (Optional if logging in as Operator)</Text>
+        <TextInput
+          style={styles.input}
+          value={edgeKey}
+          onChangeText={setEdgeKey}
+          autoCapitalize="none"
+          placeholder="Enter Edge Device API Key (Optional)"
           placeholderTextColor="#64748b"
         />
 

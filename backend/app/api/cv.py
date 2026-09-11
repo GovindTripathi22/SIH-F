@@ -138,6 +138,10 @@ async def detect_and_ingest(
     # Broadcast real-time issue update over WebSocket
     if verified_issue:
         try:
+            try:
+                await db.refresh(verified_issue)
+            except Exception:
+                pass
             issue_dict = IssueResponse.model_validate(verified_issue).model_dump(mode="json")
             await manager.broadcast({
                 "type": "issue_update",
@@ -145,8 +149,10 @@ async def detect_and_ingest(
                 "is_new": is_new,
                 "event_id": raw_event.event_id,
                 "bus_id": bus_id,
+                "route_id": route_id,
+                "corridor_id": route_id,
                 "timestamp": raw_event.timestamp.isoformat() if raw_event.timestamp else None
-            })
+            }, corridor=route_id)
         except Exception as exc:
             logger.warning(f"Failed to broadcast WebSocket live feed update: {exc}")
 
