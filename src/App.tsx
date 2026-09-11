@@ -29,8 +29,10 @@ export default function App() {
   const [liveBuses, setLiveBuses] = useState<Bus[]>([]);
   const [isLiveBackend, setIsLiveBackend] = useState<boolean>(false);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
   const fetchLiveBackendData = useCallback(async () => {
+    setIsLoading(true);
     try {
       const health = await apiClient.checkHealth();
       if (health.online && health.data) {
@@ -44,6 +46,8 @@ export default function App() {
       }
     } catch {
       setIsLiveBackend(false);
+    } finally {
+      setIsLoading(false);
     }
   }, []);
 
@@ -316,6 +320,8 @@ export default function App() {
             issues={activeIssues}
             buses={activeBuses}
             isLive={mode === 'LIVE' && isLiveBackend}
+            isOffline={mode === 'OFFLINE' || (mode === 'LIVE' && !isLiveBackend)}
+            isLoading={isLoading}
             onRefresh={fetchLiveBackendData}
             city={currentCity}
           />

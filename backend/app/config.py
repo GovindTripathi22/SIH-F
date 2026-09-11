@@ -97,6 +97,13 @@ class Settings(BaseSettings):
             if any(needle in self.EDGE_DEVICE_API_KEY.lower() for needle in ["dev-edge", "telemetry-key", "default"]):
                 raise ValueError("FATAL SECURITY VULNERABILITY: Insecure or default EDGE_DEVICE_API_KEY in production! Set a unique key via environment variable.")
 
+            # Validate that embedded demo passwords are not used in production
+            demo_passwords = ["Admin@BEL2026", "Operator@BMTC2026", "Traffic@BTP2026", "PWD@BBMP2026", "Field@BBMP2026", "Viewer@Public2026"]
+            for env_var in ["URBANPULSE_ADMIN_PASSWORD", "URBANPULSE_OPERATOR_PASSWORD", "URBANPULSE_TRAFFIC_PASSWORD", "URBANPULSE_PWD_PASSWORD", "URBANPULSE_FIELD_PASSWORD", "URBANPULSE_VIEWER_PASSWORD"]:
+                val = os.getenv(env_var, "")
+                if val and any(secrets.compare_digest(val, dp) for dp in demo_passwords):
+                    raise ValueError(f"FATAL SECURITY VULNERABILITY: Embedded demo password detected in production variable {env_var}! Set a unique, strong password.")
+
 
 settings = Settings()
 settings.validate_production_secrets()

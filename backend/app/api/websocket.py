@@ -164,13 +164,14 @@ async def websocket_live_feed(
     Clients must supply a valid JWT token via query param (e.g. ?token=<JWT>).
     Clients can optionally specify a corridor (e.g. ?corridor=route-1).
     """
-    if not token:
-        logger.warning("WebSocket connection rejected: Missing token query parameter")
+    auth_token = token or websocket.cookies.get("access_token")
+    if not auth_token:
+        logger.warning("WebSocket connection rejected: Missing token query parameter or cookie")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing token")
         return
 
     try:
-        payload = decode_access_token(token)
+        payload = decode_access_token(auth_token)
         username = payload.get("sub", "unknown")
         role = payload.get("role", Role.VIEWER)
     except Exception as exc:

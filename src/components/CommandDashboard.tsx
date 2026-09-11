@@ -3,11 +3,14 @@ import { RoadEvent, Bus, CityConfig } from '../types';
 import { MapView } from './MapView';
 import { EvidencePanel } from './EvidencePanel';
 import { WorkOrderModal } from './WorkOrderModal';
+import { apiClient } from '../api/client';
 
 interface CommandDashboardProps {
   issues: RoadEvent[];
   buses: Bus[];
   isLive?: boolean;
+  isOffline?: boolean;
+  isLoading?: boolean;
   onRefresh?: () => void;
   city?: CityConfig;
 }
@@ -16,11 +19,14 @@ export default function CommandDashboard({
   issues,
   buses,
   isLive = true,
+  isOffline = false,
+  isLoading = false,
   onRefresh,
   city
 }: CommandDashboardProps) {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [workOrderIssue, setWorkOrderIssue] = useState<RoadEvent | null>(null);
+  const [permissionDeniedMsg, setPermissionDeniedMsg] = useState<string | null>(null);
   const [filterSeverity, setFilterSeverity] = useState<'all' | 'critical' | 'high' | 'resolved'>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -40,34 +46,55 @@ export default function CommandDashboard({
   });
 
   const selectedIssue = issues.find(e => e.id === selectedEventId) || null;
-  const criticalCount = issues.filter(e => e.priority === 'critical').length;
+  const verifiedRequiringAction = issues.filter(e => e.status !== 'resolved');
+  const criticalCount = verifiedRequiringAction.filter(e => e.priority === 'critical').length;
+  const highCount = verifiedRequiringAction.filter(e => e.priority === 'high').length;
   const activeBusesCount = buses.filter(b => b.status === 'active').length;
 
   return (
     <div className="h-full flex flex-col bg-[#0a0f1d] text-[#dee2f6] overflow-hidden">
-      {/* Subtle Top Telemetry Ribbon - 3 Clean Metrics + Live Indicator */}
-      <div className="bg-[#0e1321]/70 backdrop-blur-md border-b border-slate-800/80 px-6 py-2.5 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-6 text-xs font-mono">
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400">ACTIVE DEFECTS:</span>
-            <span className="font-bold text-white text-sm">{issues.length}</span>
-            {criticalCount > 0 && (
-              <span className="px-2 py-0.5 rounded-full text-[10px] bg-rose-950/80 text-rose-300 border border-rose-500/40 font-bold">
-                {criticalCount} Critical
+      {/* Elevated Primary Signal Ribbon - Hero Metric + Demoted Secondary Stats */}
+      <div className="bg-[#0e1321]/90 backdrop-blur-md border-b border-slate-800/80 px-6 py-2.5 flex flex-wrap items-center justify-between gap-4 shrink-0">
+        <div className="flex items-center gap-4 font-mono">
+          {/* Hero Metric: Verified Issues Requiring Action */}
+          <div className="flex items-center gap-3 bg-gradient-to-r from-cyan-950/70 via-slate-900/60 to-transparent border border-cyan-500/40 px-3.5 py-1.5 rounded-xl shadow-lg shadow-cyan-950/30">
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-extrabold text-cyan-300 tracking-tight leading-none">
+                {verifiedRequiringAction.length}
               </span>
+              <span className="text-[11px] font-bold tracking-wider text-slate-200 uppercase">
+                Verified Issues Requiring Action
+              </span>
+            </div>
+            {(criticalCount > 0 || highCount > 0) && (
+              <div className="flex items-center gap-1.5 pl-2 border-l border-cyan-800/60 text-[10px]">
+                {criticalCount > 0 && (
+                  <span className="px-2 py-0.5 rounded-md bg-rose-950/80 text-rose-300 border border-rose-500/40 font-bold">
+                    {criticalCount} Critical
+                  </span>
+                )}
+                {highCount > 0 && (
+                  <span className="px-2 py-0.5 rounded-md bg-amber-950/80 text-amber-300 border border-amber-500/40 font-semibold">
+                    {highCount} High
+                  </span>
+                )}
+              </div>
             )}
           </div>
-          <div className="h-3.5 w-px bg-slate-800"></div>
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400">SCANNING FLEET:</span>
-            <span className="font-bold text-cyan-300 text-sm">{activeBusesCount}</span>
-            <span className="text-slate-500 text-[11px]">/ {buses.length} buses</span>
-          </div>
-          <div className="h-3.5 w-px bg-slate-800"></div>
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400">AVG DISPATCH SLA:</span>
-            <span className="font-bold text-emerald-300 text-sm">42 mins</span>
-            <span className="text-slate-500 text-[11px]">(99.94% bandwidth savings)</span>
+
+          {/* Demoted Secondary Fleet & SLA Stats */}
+          <div className="hidden sm:flex items-center gap-3 text-[11px] text-slate-400">
+            <div className="flex items-center gap-1.5">
+              <i className="fa-solid fa-bus text-slate-500 text-[10px]"></i>
+              <span>Fleet:</span>
+              <span className="text-slate-300 font-semibold">{activeBusesCount}/{buses.length} active</span>
+            </div>
+            <span className="text-slate-700">•</span>
+            <div className="flex items-center gap-1.5">
+              <i className="fa-solid fa-bolt text-slate-500 text-[10px]"></i>
+              <span>Avg SLA:</span>
+              <span className="text-slate-300 font-semibold">42m</span>
+            </div>
           </div>
         </div>
 
@@ -85,13 +112,33 @@ export default function CommandDashboard({
             <button
               onClick={onRefresh}
               title="Refresh database"
-              className="p-1.5 text-slate-400 hover:text-cyan-300 hover:bg-slate-800/60 rounded-md border border-slate-800 transition"
+              className="p-1.5 text-slate-400 hover:text-cyan-300 hover:bg-slate-800/60 rounded-md border border-slate-800 transition cursor-pointer"
             >
               <i className="fa-solid fa-rotate text-xs"></i>
             </button>
           )}
         </div>
       </div>
+
+      {/* Intentional Offline / Retry Banner */}
+      {isOffline && (
+        <div className="bg-amber-950/80 border-b border-amber-600/50 px-6 py-2 flex items-center justify-between text-xs text-amber-200 z-10 shrink-0 font-mono">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+            <i className="fa-solid fa-triangle-exclamation text-amber-400"></i>
+            <span>OFFLINE TELEMETRY: Operating in disconnected mode. Displaying buffered telemetry.</span>
+          </div>
+          {onRefresh && (
+            <button
+              onClick={onRefresh}
+              className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm"
+            >
+              <i className="fa-solid fa-rotate text-[10px]"></i>
+              Retry Sync
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Main Command Deck: Map on Left (65%), Incident Triage on Right (35%) */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-5 p-5 overflow-hidden">
@@ -183,9 +230,31 @@ export default function CommandDashboard({
           {/* Incident Scrollable Feed */}
           <div className="flex-1 overflow-y-auto p-4 space-y-2.5 scrollbar-thin">
             {filteredIssues.length === 0 ? (
-              <div className="text-center py-16 text-slate-500 space-y-2">
-                <i className="fa-solid fa-check-circle text-3xl text-emerald-500/50"></i>
-                <p className="text-xs font-medium">No road distress matching this filter.</p>
+              <div className="text-center py-16 text-slate-400 space-y-3 px-4">
+                <div className="w-12 h-12 rounded-full bg-slate-800/60 mx-auto flex items-center justify-center text-slate-400">
+                  <i className="fa-solid fa-clipboard-check text-xl text-emerald-400/80"></i>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-slate-200">
+                    {issues.length === 0
+                      ? 'No road distress detected in current corridor'
+                      : 'No issues match current severity filter'}
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    {issues.length === 0
+                      ? (isLive ? 'Corridor actively monitored by fleet • all road sectors clear' : 'Offline / Demo mode active • awaiting telemetry injection')
+                      : 'Adjust search query or switch to "All" severity to inspect existing observations'}
+                  </p>
+                </div>
+                {onRefresh && (
+                  <button
+                    onClick={onRefresh}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-mono transition cursor-pointer border border-slate-700"
+                  >
+                    <i className="fa-solid fa-rotate text-[10px]"></i>
+                    Refresh Telemetry
+                  </button>
+                )}
               </div>
             ) : (
               filteredIssues.map(issue => {
@@ -234,13 +303,22 @@ export default function CommandDashboard({
                         </span>
                       </div>
 
-                      {/* One-Click Dispatch Button */}
+                      {/* One-Click Dispatch Button with RBAC check */}
                       <button
                         onClick={e => {
                           e.stopPropagation();
+                          const currentUser = apiClient.getCurrentUser();
+                          const userRole = currentUser?.role || 'VIEWER';
+                          const authorizedRoles = ['ADMIN', 'PWD_ENGINEER', 'FIELD_ENGINEER'];
+                          if (!authorizedRoles.includes(userRole)) {
+                            setPermissionDeniedMsg(
+                              `Role '${userRole}' is not authorized to generate municipal work orders. Allowed: [ADMIN, PWD_ENGINEER, FIELD_ENGINEER]. Please switch to an engineering or administrator account.`
+                            );
+                            return;
+                          }
                           setWorkOrderIssue(issue);
                         }}
-                        className="px-2.5 py-1 rounded-md bg-cyan-600/80 hover:bg-cyan-500 text-white text-[10px] font-bold font-mono transition flex items-center gap-1 shadow-sm"
+                        className="px-2.5 py-1 rounded-md bg-cyan-600/80 hover:bg-cyan-500 text-white text-[10px] font-bold font-mono transition flex items-center gap-1 shadow-sm cursor-pointer"
                         title="Dispatch municipal work order"
                       >
                         <i className="fa-solid fa-file-signature text-[9px]"></i>
@@ -271,6 +349,39 @@ export default function CommandDashboard({
           </div>
         </div>
       </div>
+
+      {/* Intentional Loading Overlay */}
+      {isLoading && (
+        <div className="absolute inset-0 bg-[#0a0f1d]/75 backdrop-blur-sm z-30 flex flex-col items-center justify-center gap-3 select-none">
+          <div className="w-10 h-10 rounded-full border-2 border-cyan-500 border-t-transparent animate-spin" />
+          <p className="text-xs font-mono text-cyan-300 font-semibold tracking-wide">
+            Synchronizing municipal GIS matrix & telematics feed...
+          </p>
+        </div>
+      )}
+
+      {/* Intentional Permission-Denied Modal */}
+      {permissionDeniedMsg && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="bg-[#0e1321] border border-amber-500/60 rounded-2xl w-full max-w-md p-6 shadow-2xl text-gray-100 space-y-4">
+            <div className="flex items-center gap-3 text-amber-400">
+              <i className="fa-solid fa-triangle-exclamation text-2xl"></i>
+              <h3 className="text-sm font-bold uppercase tracking-wider font-mono">Permission Denied</h3>
+            </div>
+            <p className="text-xs text-slate-300 font-sans leading-relaxed">
+              {permissionDeniedMsg}
+            </p>
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setPermissionDeniedMsg(null)}
+                className="px-4 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold font-mono transition cursor-pointer shadow-sm"
+              >
+                Acknowledge
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Selected Issue Inspection Modal Drawer */}
       {selectedIssue && (

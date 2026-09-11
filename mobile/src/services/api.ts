@@ -11,10 +11,12 @@ const SECURE_STORE_TOKEN_KEY = 'urbanpulse_auth_token';
 const SECURE_STORE_EDGE_KEY = 'urbanpulse_edge_key';
 const SECURE_STORE_BASE_URL_KEY = 'urbanpulse_base_url';
 const SECURE_STORE_SESSION_KEY = 'urbanpulse_user_session';
+const SECURE_STORE_ROUTE_KEY = 'urbanpulse_configured_route';
 
 let currentBaseUrl = 'http://10.0.2.2:8001'; // Default for Android Emulator (127.0.0.1 on host)
 let currentToken: string | null = null;
 let currentEdgeKey: string = ''; // No hardcoded fallback — configured in Settings or Login
+let currentConfiguredRoute: string = 'ROUTE_201_C';
 let activeWs: WebSocket | null = null;
 
 export const MobileAPI = {
@@ -26,6 +28,7 @@ export const MobileAPI = {
     edgeKey: string;
     baseUrl: string;
     session: UserSession | null;
+    route: string;
   }> {
     let restoredSession: UserSession | null = null;
     try {
@@ -41,6 +44,10 @@ export const MobileAPI = {
       if (storedUrl) {
         currentBaseUrl = storedUrl.replace(/\/+$/, '');
       }
+      const storedRoute = await SecureStore.getItemAsync(SECURE_STORE_ROUTE_KEY);
+      if (storedRoute) {
+        currentConfiguredRoute = storedRoute;
+      }
       const storedSessionJson = await SecureStore.getItemAsync(SECURE_STORE_SESSION_KEY);
       if (storedSessionJson) {
         try {
@@ -55,7 +62,19 @@ export const MobileAPI = {
       edgeKey: currentEdgeKey,
       baseUrl: currentBaseUrl,
       session: restoredSession,
+      route: currentConfiguredRoute,
     };
+  },
+
+  async setConfiguredRoute(route: string): Promise<void> {
+    currentConfiguredRoute = route.trim() || 'ROUTE_201_C';
+    try {
+      await SecureStore.setItemAsync(SECURE_STORE_ROUTE_KEY, currentConfiguredRoute);
+    } catch {}
+  },
+
+  getConfiguredRoute(): string {
+    return currentConfiguredRoute;
   },
 
   async setBaseUrl(url: string): Promise<void> {
@@ -150,6 +169,21 @@ export const MobileAPI = {
     return session;
   },
 
+  async getDemoAccounts(): Promise<Array<{ role: string; username: string; description: string; default_password?: string }>> {
+    try {
+      const response = await fetch(`${currentBaseUrl}/api/v1/auth/demo-accounts`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      if (response.ok) {
+        return await response.json();
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  },
+
   async detectAndIngest(params: {
     imageUri: string;
     busId: string;
@@ -237,6 +271,7 @@ export const MobileAPI = {
     },
     corridor?: string
   ): () => void {
+    const targetCorridor = corridor !== undefined ? corridor : MobileAPI.getConfiguredRoute();
     let isClosedByClient = false;
     let reconnectAttempts = 0;
     let reconnectTimeout: any = null;
@@ -245,15 +280,15 @@ export const MobileAPI = {
     function connect() {
       if (isClosedByClient || !currentToken) return;
 
-      const url = MobileAPI.getWebSocketUrl(corridor);
+      const url = MobileAPI.getWebSocketUrl(targetCorridor);
       ws = new WebSocket(url);
       activeWs = ws;
 
       ws.onopen = () => {
         reconnectAttempts = 0;
         callbacks.onOpen?.();
-        if (corridor && ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'subscribe', corridors: [corridor] }));
+        if (targetCorridor && ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'subscribe', corridors: [targetCorridor] }));
         }
       };
 

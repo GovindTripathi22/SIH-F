@@ -178,20 +178,25 @@ export function CVDemo() {
       ctx.lineTo(drawX + drawW, drawY + drawH - markerLen);
       ctx.stroke();
 
-      // Text badge
+      // High-contrast label pill
       const cleanLabel = det.object_type.replace(/_/g, ' ').toUpperCase();
       const badgeText = `${cleanLabel} ${(det.confidence * 100).toFixed(0)}%`;
       ctx.font = 'bold 11px Inter, system-ui, sans-serif';
       const textMetrics = ctx.measureText(badgeText);
-      const badgeW = textMetrics.width + 12;
-      const badgeH = 20;
-      const badgeY = Math.max(0, drawY - badgeH - 3);
+      const badgeW = textMetrics.width + 14;
+      const badgeH = 22;
+      const badgeY = Math.max(2, drawY - badgeH - 3);
 
+      ctx.save();
       ctx.fillStyle = bgColor;
       ctx.fillRect(drawX, badgeY, badgeW, badgeH);
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(drawX, badgeY, badgeW, badgeH);
 
       ctx.fillStyle = '#ffffff';
-      ctx.fillText(badgeText, drawX + 6, badgeY + 14);
+      ctx.fillText(badgeText, drawX + 7, badgeY + 15);
+      ctx.restore();
     });
   }, []);
 
@@ -901,6 +906,20 @@ export function CVDemo() {
             ref={containerRef}
             className="relative aspect-video bg-black rounded-lg overflow-hidden border border-gray-800 flex items-center justify-center select-none"
           >
+            {/* Top and Bottom Gradient Scrims for High-Contrast Visibility */}
+            <div className="absolute top-0 inset-x-0 h-16 bg-gradient-to-b from-black/85 via-black/40 to-transparent pointer-events-none z-10" />
+            <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-black/85 via-black/40 to-transparent pointer-events-none z-10" />
+
+            {/* Achieved Capture Rate HUD Pill */}
+            {(videoUrl || imageUrl) && (
+              <div className="absolute top-3 right-3 z-20 flex items-center gap-2 font-mono text-[11px]">
+                <span className="bg-black/80 backdrop-blur-md border border-cyan-500/50 text-cyan-300 px-3 py-1 rounded-full font-bold shadow-xl flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                  Achieved: {stats.avgFps > 0 ? stats.avgFps.toFixed(1) : (isProcessing ? '1.0' : '0.0')} fps | Interval: {stats.avgFps > 0 ? (1 / stats.avgFps).toFixed(1) : '1.0'}s
+                </span>
+              </div>
+            )}
+
             {videoUrl ? (
               <>
                 <video

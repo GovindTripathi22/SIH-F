@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test src/api/__tests__/*.test.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.1.0",

@@ -6,9 +6,9 @@
 **Theme: Smart Automation | Category: Software / Edge AI / GIS**  
 
 [![System Status: Operational](https://img.shields.io/badge/Status-Operational%20%26%20Tested-brightgreen.svg)]()
-[![YOLOv8: Real Weights](https://img.shields.io/badge/AI%20Model-RDD2022%20YOLOv8n%20(6.21MB)-blue.svg)]()
-[![Tests: 34/34 Passing](https://img.shields.io/badge/Pytest-34%2F34%20Passed-success.svg)]()
-[![E2E: 9/9 Verified](https://img.shields.io/badge/E2E%20Harness-9%2F9%20Passed-success.svg)]()
+[![YOLOv8: Real Weights](https://img.shields.io/badge/AI%20Model-sabiq__yolo%20(44MB)%20%2B%20rdd__yolov8n%20(6.2MB)-blue.svg)]()
+[![Backend Tests: 49/49 Passing](https://img.shields.io/badge/Pytest-49%2F49%20Passed-success.svg)]()
+[![Web Tests: 17/17 Passing](https://img.shields.io/badge/Web%20Tests-17%2F17%20Passed-success.svg)]()
 [![Privacy: DPDP Act 2023](https://img.shields.io/badge/Privacy-DPDP%20Act%202023%20Aligned-orange.svg)]()
 
 ---
@@ -68,17 +68,17 @@ All audit weaknesses have been remediated with real, executing code and empirica
 
 | Subsystem | Status | Implementation Details | Evidence & Documentation |
 | :--- | :--- | :--- | :--- |
-| **Edge Computer Vision** | ✅ OPERATIONAL | Real `rdd_yolov8n.pt` (6.21MB) deep learning tensor inference; 16 RDD classes, 28.3ms latency, 35.4 FPS. | [MODEL_CARD.md](./MODEL_CARD.md) / [MODEL_EVALUATION.md](./MODEL_EVALUATION.md) |
+| **Edge Computer Vision** | ✅ OPERATIONAL | Real `models/sabiq_yolo.pt` (44.0MB primary) and `models/rdd_yolov8n.pt` (6.21MB canonical edge) deep learning tensor inference; road defect detection, ~28ms latency. | [MODEL_CARD.md](./MODEL_CARD.md) / [MODEL_EVALUATION.md](./MODEL_EVALUATION.md) |
 | **Camera Health Pre-Flight** | ✅ OPERATIONAL | Laplacian variance blur analysis, histogram exposure, obstruction ratios. | [MODEL_CARD.md](./MODEL_CARD.md) |
 | **Edge Privacy Blurring** | ✅ OPERATIONAL | OpenCV Haar face & license plate detection; irreversible Gaussian blur ($31\times 31$). | [PRIVACY.md](./PRIVACY.md) |
-| **Edge Offline Resilience** | ✅ OPERATIONAL | SQLite-backed ACID persistent FIFO queue; survives crash, network loss, and power cycles. | `backend/app/edge/persistent_queue.py` |
+| **Database Migrations** | ✅ OPERATIONAL | Async Alembic migrations (`backend/alembic/`) replacing legacy inline DDL/create_all. | `backend/alembic/versions/0001_initial_schema.py` |
+| **Edge Offline Resilience** | ✅ OPERATIONAL | 500-entry SQLite ceiling with automatic loop recovery, 5-frame latency hysteresis (1.0s ↔ 1.5s), timeout-chained scheduling, iOS flash. | `mobile/src/services/offlineQueue.ts`, `LiveScanScreen.tsx` |
 | **Dialect-Aware Spatial DB**| ✅ OPERATIONAL | PostGIS `geography(POINT, 4326)` on PostgreSQL, fast Haversine on SQLite. | `backend/app/models/spatial.py` |
 | **Multi-Pass Fleet Consensus**| ✅ OPERATIONAL| Corridor matching with compass heading delta check ($\Delta\theta \le 120^\circ$) to prevent carriageway merging; Bayesian fusion. | `backend/app/services/spatial_clustering.py` |
-| **Security, RBAC & Rate Limiting** | ✅ OPERATIONAL | Sliding-window IP rate limiting, Bcrypt passwords, HMAC-SHA256 JWTs, Edge Device API keys, 6 roles. | `backend/app/core/security.py`, `middleware/rate_limit.py` |
-| **Closed-Loop Work Orders** | ✅ OPERATIONAL | Official municipal PDF generation (`reportlab`), clean-pass verification ($\ge 2$ clean passes), and lifecycle tracking. | `backend/app/services/work_order_service.py` |
-| **Frontend Command Center** | ✅ OPERATIONAL | React 18, TypeScript, Tailwind CSS, Leaflet GIS, live `/api/v1/analytics/overview` integration, and interactive Role Switcher. | `src/components/CommandDashboard.tsx` |
-| **Automated Test Suite** | ✅ OPERATIONAL | 33 automated Pytest tests across API, Auth, GIS, Resilience, Work Orders, and Red-Team. | `backend/tests/` (33/33 Passing) |
-| **Deterministic E2E Harness**| ✅ OPERATIONAL | Full 9-step hero integration script verifying detection to verified work order. | `scripts/e2e_verify.py` (9/9 Passing) |
+| **Security, RBAC & CSRF** | ✅ OPERATIONAL | HttpOnly SameSite cookies + Double-Submit CSRF, zero password leaks in client bundles, constant-time comparisons, dev-only role switcher. | `backend/app/core/security.py`, `middleware/rate_limit.py`, `src/api/client.ts`, `RoleSwitcher.tsx` |
+| **Closed-Loop Work Orders** | ✅ OPERATIONAL | Consolidated municipal PDF generation (`reportlab`), clean-pass verification ($\ge 2$ clean passes), and lifecycle tracking. | `backend/app/services/work_order_service.py` |
+| **Frontend Command Center** | ✅ OPERATIONAL | React 18, TypeScript, Tailwind CSS, Leaflet GIS, hero metric "Verified Issues Requiring Action", intentional states (loading/offline/empty/denied), truth-in-reporting guardrail. | `src/components/CommandDashboard.tsx` |
+| **Automated Test Suite** | ✅ OPERATIONAL | 49 Pytest backend tests (API, Auth/CSRF, WebSocket matrix, GIS, Resilience) + 17 Node web client unit tests (66 total). | `backend/tests/` (49/49) & `src/api/__tests__/` (17/17) |
 
 ---
 
@@ -120,7 +120,7 @@ npm run dev
 
 UrbanPulse includes an automated testing harness that proves technical defensibility:
 
-### 1. Run Automated Backend Pytest Suite (33 Tests)
+#### 1. Run Automated Backend Pytest Suite (49 Tests)
 
 ```bash
 cd backend
@@ -128,45 +128,47 @@ python -m pytest tests -v
 ```
 
 ```
-tests/test_api.py::test_health_check PASSED                              [  3%]
-tests/test_api.py::test_get_issues PASSED                                [  6%]
-tests/test_api.py::test_get_buses PASSED                                 [  9%]
-tests/test_api.py::test_cv_model_info PASSED                             [ 12%]
-tests/test_api.py::test_analytics_overview PASSED                        [ 15%]
-tests/test_auth_rbac.py::test_auth_demo_accounts PASSED                  [ 18%]
-tests/test_auth_rbac.py::test_successful_login PASSED                    [ 21%]
-tests/test_auth_rbac.py::test_failed_login_invalid_password PASSED       [ 24%]
-tests/test_auth_rbac.py::test_protected_profile_endpoint PASSED          [ 27%]
-tests/test_edge_queue_resilience.py::test_edge_queue_lifecycle PASSED    [ 30%]
-tests/test_failures.py::test_missing_or_out_of_bounds_gps PASSED         [ 33%]
-tests/test_failures.py::test_malformed_event_payload PASSED              [ 36%]
-tests/test_failures.py::test_invalid_event_type PASSED                   [ 39%]
-tests/test_failures.py::test_duplicate_event_handling PASSED             [ 42%]
-tests/test_failures.py::test_unauthorized_issue_status_update PASSED     [ 45%]
-tests/test_privacy_and_health.py::test_privacy_anonymizer_blur_execution PASSED [ 48%]
-tests/test_privacy_and_health.py::test_camera_health_clear_frame PASSED  [ 51%]
-tests/test_privacy_and_health.py::test_camera_health_blurred_frame PASSED [ 54%]
-tests/test_privacy_and_health.py::test_camera_health_low_light_night PASSED [ 57%]
-tests/test_security_redteam.py::test_sql_injection_vector_in_queries PASSED [ 60%]
-tests/test_security_redteam.py::test_xss_vector_in_status_update PASSED  [ 63%]
-tests/test_security_redteam.py::test_oversized_payload_injection PASSED  [ 66%]
-tests/test_security_redteam.py::test_role_escalation_attempt PASSED      [ 69%]
-tests/test_spatial_clustering.py::test_multipass_two_bus_verification_escalation PASSED [ 72%]
-tests/test_spatial_clustering.py::test_opposite_heading_rejection PASSED [ 75%]
-tests/test_spatial_clustering.py::test_dynamic_uncertainty_clustering PASSED [ 78%]
-tests/test_work_orders.py::test_work_order_pdf_generation PASSED         [ 81%]
-tests/test_work_orders.py::test_work_order_invalid_issue PASSED          [ 84%]
-tests/test_work_orders.py::test_closed_loop_lifecycle_transition PASSED  [ 87%]
-tests/test_work_orders.py::test_clean_pass_verification_lifecycle PASSED [ 90%]
-tests/test_work_orders.py::test_reopen_on_new_defect_after_repair PASSED [ 93%]
-tests/test_work_orders.py::test_clean_pass_non_repaired_ignored PASSED   [ 96%]
-tests/test_work_orders.py::test_clean_pass_nonexistent_issue PASSED      [100%]
+tests/test_api.py (5 tests: health, issues, buses, cv model, analytics)
+tests/test_auth_rbac.py (8 tests: demo accounts, login, invalid pass, profile, cookie session, csrf, logout, prod mode)
+tests/test_edge_queue_resilience.py (1 test: queue lifecycle & recovery)
+tests/test_failures.py (7 tests: gps bounds, malformed payload, invalid event, duplicate events, rbac status, illegal lifecycle, repair failure reobservation)
+tests/test_privacy_and_health.py (4 tests: Haar blur execution, clear frame, blurred frame, low-light night)
+tests/test_security_redteam.py (6 tests: unauthenticated blocked, role escalation, authorized roles, oversized payload, SQL injection, XSS vector)
+tests/test_spatial_clustering.py (3 tests: multi-pass 2-bus escalation, opposite carriageway heading separation, GPS corridor snapping)
+tests/test_websocket_feed.py (11 tests: unauth reject, invalid token, authenticated handshake, connection resilience, detect & ingest broadcast, role filtering, corridor filtering, detect corridor filter, can_deliver unit matrix, 2-client isolation, cookie auth)
+tests/test_work_orders.py (4 tests: ReportLab PDF generation, invalid issue, closed-loop lifecycle, automated clean-pass resolution)
 
-======================= 33 passed, 8 warnings in 9.35s ========================
-
+======================= 49 passed, 52 warnings in 37.76s =======================
 ```
 
-### 2. Run Deterministic End-to-End Verification Harness
+### 2. Run Frontend Web Client Unit Suite (17 Tests)
+
+```bash
+npm test
+```
+
+```
+# Subtest: APIClient Storage Hygiene: Removes legacy tokens from localStorage
+# Subtest: APIClient CSRF Protection: Passes credentials and X-CSRF-Token on state-changing requests
+# Subtest: APIClient Timeout: Aborts request when timeout threshold is exceeded
+# Subtest: APIClient Authentication: Login stores csrf/access token in memory and sets user
+# Subtest: APIClient Authentication: Logout clears session cookies and local memory state
+# Subtest: APIClient Error Handling: Parses backend JSON error detail
+# Subtest: APIClient Method checkHealth: Returns health metadata when online, false on error
+# Subtest: APIClient Method getWebSocketUrl: Generates correct URL with ws/wss protocol and token
+# Subtest: APIClient Method getIssues: Returns mapped database items when online
+# Subtest: APIClient Method getBuses: Maps backend fleet items and provides fallback
+# Subtest: APIClient Method detectFrame: Sends FormData with image file and returns CV response
+# Subtest: APIClient Method detectAndIngest: Sends telemetry metadata and coordinates with frame
+# Subtest: APIClient Work Order: downloadWorkOrderPdf uses shared requestRaw path and returns Blob
+# Subtest: APIClient Method updateLifecycle: Posts JSON lifecycle payload with actor and notes
+# Subtest: APIClient Method getAnalyticsOverview: Fetches overview metrics or compiles fallback
+# Subtest: APIClient Data Mapping: mapBackendIssueToRoadEvent correctly normalizes verified issues
+# Subtest: Truth-in-Reporting Regression: LIVE fallback correctly attributes offline source and prevents misleading presentation
+# tests 17 | pass 17 | fail 0 (node:test runner in 0.49s)
+```
+
+### 3. Run Deterministic End-to-End Verification Harness
 
 ```bash
 python scripts/e2e_verify.py

@@ -34,6 +34,7 @@ export const SettingsScreen: React.FC<Props> = ({
   const handleSave = async () => {
     await MobileAPI.setBaseUrl(serverUrl);
     await MobileAPI.setEdgeKey(edgeKey);
+    await MobileAPI.setConfiguredRoute(routeId);
     setTestStatus('Settings saved securely to device storage');
   };
 
@@ -163,6 +164,8 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 13,
     fontFamily: 'monospace',
+    minHeight: 44,
+    justifyContent: 'center',
   },
   hint: {
     color: '#64748b',
@@ -187,8 +190,11 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#334155',
+    minHeight: 44,
+    minWidth: 44,
   },
   testButtonText: {
     color: '#38bdf8',
@@ -201,6 +207,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+    minWidth: 44,
   },
   saveButtonText: {
     color: '#ffffff',

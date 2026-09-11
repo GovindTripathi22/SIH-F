@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   Dimensions,
   ActivityIndicator,
+  Platform,
+  Animated,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
@@ -37,22 +39,37 @@ export const LiveScanScreen: React.FC<Props> = ({
   const [lastResult, setLastResult] = useState<CVDetectionResponse | null>(null);
   const [latencyMs, setLatencyMs] = useState<number>(0);
   const [fps, setFps] = useState<number>(0);
+  const [achievedFps, setAchievedFps] = useState<number>(1.0);
+  const [captureIntervalMs, setCaptureIntervalMs] = useState<number>(1000);
+  const [rollingLatencyMs, setRollingLatencyMs] = useState<number>(0);
   const [cameraHealth, setCameraHealth] = useState<string>('NORMAL');
   const [pendingQueueCount, setPendingQueueCount] = useState<number>(0);
+  const [isQueueFull, setIsQueueFull] = useState<boolean>(false);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const [wsNotification, setWsNotification] = useState<string>('');
 
   const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number }>({
-    lat: 12.9352,
-    lng: 77.6245,
+    lat: 12.9385,
+    lng: 77.6280,
     accuracy: 2.5,
   });
+
   const [statusMessage, setStatusMessage] = useState<string>('Dashcam Standby');
 
   const cameraRef = useRef<CameraView>(null);
-  const scanIntervalRef = useRef<any>(null);
+  const scanTimerRef = useRef<any>(null);
   const isProcessingRef = useRef<boolean>(false);
   const locationSubRef = useRef<Location.LocationSubscription | null>(null);
+
+  // Capture pacing hysteresis state
+  const latencyBufferRef = useRef<number[]>([]);
+  const slowStreakRef = useRef<number>(0);
+  const fastStreakRef = useRef<number>(0);
+  const activeIntervalRef = useRef<number>(1000);
+  const lastCaptureTimeRef = useRef<number>(Date.now());
+
+  // iOS non-audio viewfinder flash animation
+  const flashAnim = useRef(new Animated.Value(0)).current;
 
   // Mutable refs to prevent React stale closure bugs inside interval ticks
   const coordsRef = useRef(coords);
@@ -74,6 +91,13 @@ export const LiveScanScreen: React.FC<Props> = ({
   useEffect(() => {
     isScanningRef.current = isScanning;
   }, [isScanning]);
+
+  // Initial pending queue sync check
+  useEffect(() => {
+    const count = OfflineQueue.getPendingCount();
+    setPendingQueueCount(count);
+    setIsQueueFull(OfflineQueue.isQueueFull());
+  }, []);
 
   // Initialize GPS Location tracking via expo-location
   useEffect(() => {
@@ -98,36 +122,30 @@ export const LiveScanScreen: React.FC<Props> = ({
         });
 
         if (mounted && initialLoc?.coords) {
-          const fresh = {
+          setCoords({
             lat: initialLoc.coords.latitude,
             lng: initialLoc.coords.longitude,
-            accuracy: initialLoc.coords.accuracy ?? 3.0,
-          };
-          coordsRef.current = fresh;
-          setCoords(fresh);
+            accuracy: initialLoc.coords.accuracy || 2.5,
+          });
         }
 
-        // Start continuous GPS tracking along transit corridor
-        const sub = await Location.watchPositionAsync(
+        // Subscribe to ongoing GPS stream with 2-meter threshold
+        locationSubRef.current = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.High,
-            timeInterval: 1000,
             distanceInterval: 2,
+            timeInterval: 1000,
           },
-          (newLoc) => {
-            if (mounted && newLoc?.coords) {
-              const fresh = {
-                lat: newLoc.coords.latitude,
-                lng: newLoc.coords.longitude,
-                accuracy: newLoc.coords.accuracy ?? 2.5,
-              };
-              coordsRef.current = fresh;
-              setCoords(fresh);
+          (loc) => {
+            if (mounted && loc?.coords) {
+              setCoords({
+                lat: loc.coords.latitude,
+                lng: loc.coords.longitude,
+                accuracy: loc.coords.accuracy || 2.5,
+              });
             }
           }
         );
-
-        locationSubRef.current = sub;
       } catch (err) {
         console.warn('Location initialization error:', err);
       }
@@ -144,59 +162,79 @@ export const LiveScanScreen: React.FC<Props> = ({
     };
   }, []);
 
-  // Update pending queue badge from SQLite
+  // Subscribe to backend WebSocket live feed
   useEffect(() => {
-    const updateCount = () => setPendingQueueCount(OfflineQueue.getPendingCount());
-    updateCount();
-    const timer = setInterval(updateCount, 2000);
-    return () => clearInterval(timer);
-  }, []);
+    let mounted = true;
 
-  // Subscribe to live WebSocket feed for this route corridor
-  useEffect(() => {
-    const unsubscribe = MobileAPI.subscribeLiveFeed(
-      {
-        onOpen: () => setWsConnected(true),
-        onClose: () => setWsConnected(false),
-        onError: () => setWsConnected(false),
-        onMessage: (msg: any) => {
-          if (msg.type === 'issue_update') {
-            const issueId = msg.issue?.issue_id || msg.event_id || 'new';
-            setWsNotification(`📡 Live Corridor Alert: Issue ${issueId} verified`);
-            setTimeout(() => setWsNotification(''), 4000);
-          }
-        },
+    const unsubscribe = MobileAPI.subscribeLiveFeed({
+      onOpen: () => {
+        if (mounted) setWsConnected(true);
       },
-      routeId
-    );
+      onClose: () => {
+        if (mounted) setWsConnected(false);
+      },
+      onError: () => {
+        if (mounted) setWsConnected(false);
+      },
+      onMessage: (msg: any) => {
+        if (!mounted) return;
+        if (msg.type === 'corridor_alert' || msg.type === 'verified_issue') {
+          setWsNotification(`📡 Corridor broadcast: ${msg.event_type || 'Road hazard'} verified`);
+          setTimeout(() => {
+            if (mounted) setWsNotification('');
+          }, 4000);
+        }
+      },
+    }, routeId);
 
     return () => {
+      mounted = false;
       unsubscribe();
     };
   }, [routeId]);
 
-  // Genuine camera capture and edge inference pipeline
+  const triggerViewfinderFlash = () => {
+    if (Platform.OS === 'ios') {
+      flashAnim.setValue(0.7);
+      Animated.timing(flashAnim, {
+        toValue: 0,
+        duration: 150,
+        useNativeDriver: true,
+      }).start();
+    }
+  };
+
+  // Edge Frame Capture and Inference Loop with Hysteresis Pacing
   const processEdgeFrame = async () => {
-    // Prevent overlapping capture ticks if inference/network takes longer than 1s
-    if (isProcessingRef.current) {
+    if (isProcessingRef.current) return;
+
+    // Check if offline queue is full
+    const currentPending = OfflineQueue.getPendingCount();
+    setPendingQueueCount(currentPending);
+    const queueFull = OfflineQueue.isQueueFull();
+    setIsQueueFull(queueFull);
+    if (queueFull) {
+      setStatusMessage('⚠️ SQLite Queue Full (500/500) — Capturing paused until synced');
+      // Timeout-chained scheduling: continue polling so capturing automatically resumes when replay creates capacity
+      if (isScanningRef.current) {
+        if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+        scanTimerRef.current = setTimeout(() => {
+          processEdgeFrame();
+        }, activeIntervalRef.current);
+      }
       return;
     }
-    isProcessingRef.current = true;
 
+    isProcessingRef.current = true;
     const startTime = Date.now();
     let frameUri: string | null = null;
-    const currentGps = coordsRef.current;
+
     const currentBus = busIdRef.current;
     const currentRoute = routeIdRef.current;
     const currentCam = cameraIdRef.current;
+    const currentGps = coordsRef.current;
 
     try {
-      if (!cameraPermission?.granted) {
-        setStatusMessage('Camera access required. Please enable camera.');
-        return;
-      }
-
-      // Capture genuine photo from phone camera
       if (cameraRef.current) {
         try {
           const photo = await cameraRef.current.takePictureAsync({
@@ -204,8 +242,11 @@ export const LiveScanScreen: React.FC<Props> = ({
             shutterSound: false,
           });
 
+          // Trigger iOS non-audio visual flash
+          triggerViewfinderFlash();
+
           if (photo?.uri) {
-            // Resize to 640px JPEG at 1 FPS interval for real-time edge processing
+            // Resize to 640px JPEG for edge processing
             try {
               const resized = await manipulateAsync(
                 photo.uri,
@@ -238,10 +279,42 @@ export const LiveScanScreen: React.FC<Props> = ({
       });
 
       const elapsed = Date.now() - startTime;
+      const now = Date.now();
+      const intervalSinceLast = Math.max(1, now - lastCaptureTimeRef.current);
+      lastCaptureTimeRef.current = now;
+      const instantFps = Math.min(2.0, Number((1000 / intervalSinceLast).toFixed(1)));
+      setAchievedFps(instantFps);
+
       setLatencyMs(result.cv_performance?.latency_ms || elapsed);
       setFps(result.cv_performance?.fps || Math.round(1000 / Math.max(elapsed, 1)));
       setCameraHealth(result.cv_performance?.camera_health || 'NORMAL');
       setLastResult(result);
+
+      // Pacing hysteresis: maintain 5-frame rolling latency average
+      // 5 consecutive slow frames (> 1000ms) back off to 1.5s
+      // 10 consecutive fast frames (<= 1000ms) return to 1.0s
+      latencyBufferRef.current.push(elapsed);
+      if (latencyBufferRef.current.length > 5) latencyBufferRef.current.shift();
+      const rollingAvg = Math.round(
+        latencyBufferRef.current.reduce((sum, val) => sum + val, 0) / latencyBufferRef.current.length
+      );
+      setRollingLatencyMs(rollingAvg);
+
+      if (elapsed > 1000) {
+        slowStreakRef.current += 1;
+        fastStreakRef.current = 0;
+        if (slowStreakRef.current >= 5 && activeIntervalRef.current === 1000) {
+          activeIntervalRef.current = 1500;
+          setCaptureIntervalMs(1500);
+        }
+      } else {
+        fastStreakRef.current += 1;
+        slowStreakRef.current = 0;
+        if (fastStreakRef.current >= 10 && activeIntervalRef.current === 1500) {
+          activeIntervalRef.current = 1000;
+          setCaptureIntervalMs(1000);
+        }
+      }
 
       if (result.detections && result.detections.length > 0) {
         setStatusMessage(`🚨 Detected ${result.detections.length} defect(s): ${result.event_type}`);
@@ -251,31 +324,45 @@ export const LiveScanScreen: React.FC<Props> = ({
     } catch (err: any) {
       // Network drop or edge disconnect: persist into durable SQLite offline queue
       if (frameUri) {
-        OfflineQueue.enqueue({
-          busId: currentBus,
-          routeId: currentRoute,
-          cameraId: currentCam,
-          latitude: currentGps.lat,
-          longitude: currentGps.lng,
-          gpsAccuracy: currentGps.accuracy,
-          timestamp: new Date().toISOString(),
-          frameBase64: frameUri,
-        });
-        setPendingQueueCount(OfflineQueue.getPendingCount());
-        setStatusMessage(`Network dropped: Saved to SQLite queue (${err?.message || 'offline'})`);
+        try {
+          OfflineQueue.enqueue({
+            busId: currentBus,
+            routeId: currentRoute,
+            cameraId: currentCam,
+            latitude: currentGps.lat,
+            longitude: currentGps.lng,
+            gpsAccuracy: currentGps.accuracy,
+            timestamp: new Date().toISOString(),
+            frameBase64: frameUri,
+          });
+          const newPending = OfflineQueue.getPendingCount();
+          setPendingQueueCount(newPending);
+          setIsQueueFull(OfflineQueue.isQueueFull());
+          setStatusMessage(`Network dropped: Saved to SQLite queue (${err?.message || 'offline'})`);
+        } catch (queueErr: any) {
+          setIsQueueFull(true);
+          setStatusMessage(`Offline Queue Full: ${queueErr.message}`);
+        }
       } else {
         setStatusMessage(`Edge error: ${err?.message || 'Scan failed'}`);
       }
     } finally {
       isProcessingRef.current = false;
+      // Timeout-chained scheduling: guarantees zero overlapping captures
+      if (isScanningRef.current) {
+        if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+        scanTimerRef.current = setTimeout(() => {
+          processEdgeFrame();
+        }, activeIntervalRef.current);
+      }
     }
   };
 
   const toggleScanning = async () => {
     if (isScanning) {
-      if (scanIntervalRef.current) {
-        clearInterval(scanIntervalRef.current);
-        scanIntervalRef.current = null;
+      if (scanTimerRef.current) {
+        clearTimeout(scanTimerRef.current);
+        scanTimerRef.current = null;
       }
       setIsScanning(false);
       setStatusMessage('Dashcam Paused');
@@ -288,17 +375,16 @@ export const LiveScanScreen: React.FC<Props> = ({
         }
       }
       setIsScanning(true);
-      setStatusMessage('Dashcam Active: 1 FPS Scanning (640px JPEG)');
+      setStatusMessage(`Dashcam Active: ${(1000 / activeIntervalRef.current).toFixed(1)} FPS Scanning`);
       processEdgeFrame();
-      scanIntervalRef.current = setInterval(processEdgeFrame, 1000);
     }
   };
 
   useEffect(() => {
     return () => {
-      if (scanIntervalRef.current) {
-        clearInterval(scanIntervalRef.current);
-        scanIntervalRef.current = null;
+      if (scanTimerRef.current) {
+        clearTimeout(scanTimerRef.current);
+        scanTimerRef.current = null;
       }
     };
   }, []);
@@ -309,7 +395,9 @@ export const LiveScanScreen: React.FC<Props> = ({
       <View style={styles.headerBar}>
         <View style={styles.badgeGroup}>
           <View style={[styles.badge, { backgroundColor: isScanning ? '#059669' : '#475569' }]}>
-            <Text style={styles.badgeText}>{isScanning ? 'LIVE 1s' : 'STANDBY'}</Text>
+            <Text style={styles.badgeText}>
+              {isScanning ? `${achievedFps.toFixed(1)} FPS (${(captureIntervalMs / 1000).toFixed(1)}s • ${rollingLatencyMs}ms avg)` : 'STANDBY'}
+            </Text>
           </View>
           <View
             style={[
@@ -334,6 +422,15 @@ export const LiveScanScreen: React.FC<Props> = ({
         </TouchableOpacity>
       </View>
 
+      {/* Queue Full Warning Banner */}
+      {isQueueFull && (
+        <TouchableOpacity style={styles.queueFullBanner} onPress={onNavigateToHistory}>
+          <Text style={styles.queueFullBannerText}>
+            ⚠️ SQLite Queue Full (500/500) — Capturing paused until queue is synced
+          </Text>
+        </TouchableOpacity>
+      )}
+
       {/* Dashcam Viewfinder */}
       <View style={styles.viewfinder}>
         {cameraPermission?.granted ? (
@@ -357,6 +454,19 @@ export const LiveScanScreen: React.FC<Props> = ({
           </View>
         )}
 
+        {/* Top and Bottom Gradient Scrims for High-Contrast Visibility */}
+        <View style={styles.topScrim} pointerEvents="none" />
+        <View style={styles.bottomScrim} pointerEvents="none" />
+
+        {/* iOS Non-Audio Viewfinder Flash Overlay */}
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: '#ffffff', opacity: flashAnim },
+          ]}
+          pointerEvents="none"
+        />
+
         {/* Viewfinder HUD Overlay */}
         <View style={styles.viewfinderOverlay} pointerEvents="none">
           {/* HUD Crosshairs */}
@@ -376,7 +486,8 @@ export const LiveScanScreen: React.FC<Props> = ({
             );
 
             const isPothole = det.class.toLowerCase().includes('pothole');
-            const boxColor = isPothole ? '#f43f5e' : '#f59e0b';
+            const isCrack = det.class.toLowerCase().includes('crack');
+            const boxColor = isPothole ? '#f43f5e' : (isCrack ? '#f97316' : '#06b6d4');
 
             return (
               <View
@@ -390,14 +501,16 @@ export const LiveScanScreen: React.FC<Props> = ({
                     height,
                     borderColor: boxColor,
                     backgroundColor: isPothole
-                      ? 'rgba(244, 63, 94, 0.2)'
-                      : 'rgba(245, 158, 11, 0.2)',
+                      ? 'rgba(244, 63, 94, 0.22)'
+                      : 'rgba(249, 115, 22, 0.22)',
                   },
                 ]}
               >
-                <Text style={[styles.boxLabel, { backgroundColor: boxColor }]}>
-                  {det.class} {(det.confidence * 100).toFixed(0)}%
-                </Text>
+                <View style={[styles.boxLabelContainer, { backgroundColor: boxColor }]}>
+                  <Text style={styles.boxLabelText}>
+                    {det.class.toUpperCase()} {(det.confidence * 100).toFixed(0)}%
+                  </Text>
+                </View>
               </View>
             );
           })}
@@ -409,7 +522,7 @@ export const LiveScanScreen: React.FC<Props> = ({
               {locationPermission ? ' [HARDWARE]' : ' [CORRIDOR]'}
             </Text>
             <Text style={styles.hudText}>
-              BUS: {busId} | RT: {routeId} | {fps.toFixed(0)} FPS ({latencyMs.toFixed(0)}ms)
+              BUS: {busId} | RT: {routeId} | Achieved: {achievedFps.toFixed(1)} FPS ({latencyMs.toFixed(0)}ms)
             </Text>
           </View>
         </View>
@@ -466,9 +579,12 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   badge: {
-    paddingHorizontal: 7,
-    paddingVertical: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
     borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+    minHeight: 28,
   },
   badgeText: {
     color: '#ffffff',
@@ -478,26 +594,65 @@ const styles = StyleSheet.create({
   },
   queueBadge: {
     backgroundColor: '#1e293b',
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
     borderWidth: 1,
     borderColor: '#334155',
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   queueBadgeText: {
     color: '#38bdf8',
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: 'bold',
+    fontFamily: 'monospace',
+  },
+  queueFullBanner: {
+    backgroundColor: '#450a0a',
+    borderColor: '#f43f5e',
+    borderWidth: 1,
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 10,
+    minHeight: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  queueFullBannerText: {
+    color: '#ffe4e6',
+    fontSize: 11,
+    fontWeight: 'bold',
+    textAlign: 'center',
   },
   viewfinder: {
-    width: '100%',
+    width: VIEWFINDER_WIDTH,
     height: VIEWFINDER_HEIGHT,
-    backgroundColor: '#030712',
-    borderRadius: 12,
+    backgroundColor: '#000000',
+    borderRadius: 14,
     overflow: 'hidden',
+    alignSelf: 'center',
     borderWidth: 1,
     borderColor: '#1e293b',
     position: 'relative',
+  },
+  topScrim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 50,
+    backgroundColor: 'rgba(10, 15, 29, 0.75)',
+  },
+  bottomScrim: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 50,
+    backgroundColor: 'rgba(10, 15, 29, 0.75)',
   },
   permissionContainer: {
     flex: 1,
@@ -520,9 +675,13 @@ const styles = StyleSheet.create({
   },
   permissionButton: {
     backgroundColor: '#0284c7',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
     borderRadius: 8,
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   permissionButtonText: {
     color: '#ffffff',
@@ -553,24 +712,31 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderRadius: 4,
   },
-  boxLabel: {
+  boxLabelContainer: {
     position: 'absolute',
-    top: -16,
+    top: -18,
     left: -2,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: '#000000',
+  },
+  boxLabelText: {
     color: '#ffffff',
     fontSize: 9,
     fontWeight: 'bold',
-    paddingHorizontal: 4,
-    borderRadius: 2,
   },
   hudOverlay: {
     position: 'absolute',
     bottom: 8,
     left: 8,
     right: 8,
-    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    backgroundColor: 'rgba(15, 23, 42, 0.88)',
     padding: 6,
     borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#1e293b',
   },
   hudText: {
     color: '#94a3b8',
@@ -585,6 +751,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginTop: 8,
     alignItems: 'center',
+    minHeight: 44,
+    justifyContent: 'center',
   },
   wsNotificationText: {
     color: '#34d399',
@@ -599,6 +767,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#1e293b',
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
   },
   statusText: {
     color: '#e2e8f0',
@@ -613,7 +783,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 10,
     alignItems: 'center',
+    justifyContent: 'center',
     elevation: 4,
+    minHeight: 48,
   },
   actionButtonText: {
     color: '#ffffff',
@@ -626,8 +798,10 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 10,
     alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#334155',
+    minHeight: 48,
   },
   secondaryButtonText: {
     color: '#94a3b8',
