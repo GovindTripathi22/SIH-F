@@ -4,8 +4,8 @@
  * Provides live synchronization with graceful fallback for offline demonstration.
  */
 
-import { RoadEvent, Bus, Route } from '../types';
-import { simulatedEvents, simulatedBuses } from '../data';
+import type { RoadEvent, Bus, Route } from '../types.ts';
+import { simulatedEvents, simulatedBuses } from '../data.ts';
 
 const BASE_URL = ''; // Relative to take advantage of Vite proxy, or http://127.0.0.1:8001 fallback
 
@@ -125,16 +125,27 @@ export function mapBackendIssueToRoadEvent(item: any): RoadEvent {
   };
 }
 
-class APIClient {
+export class APIClient {
   private isOnline = false;
   private token: string | null = null;
+  private csrfToken: string | null = null;
   private currentUser: { username: string; role: string; full_name: string } | null = null;
 
   constructor() {
-    // Prefer sessionStorage to reduce persistent XSS token exposure window
+    // Web authentication relies on httpOnly SameSite session cookies.
+    // Clean up any stale JWT tokens from previous localStorage implementations.
     try {
-      this.token = sessionStorage.getItem('urbanpulse_jwt_token') || localStorage.getItem('urbanpulse_jwt_token');
-      const savedUser = sessionStorage.getItem('urbanpulse_user') || localStorage.getItem('urbanpulse_user');
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('urbanpulse_jwt_token');
+        localStorage.removeItem('urbanpulse_user');
+      }
+    } catch {
+      // Storage unavailable in restricted sandboxes
+    }
+
+    // Restore non-sensitive user identity profile for display purposes only
+    try {
+      const savedUser = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('urbanpulse_user') : null;
       if (savedUser) this.currentUser = JSON.parse(savedUser);
     } catch {
       this.currentUser = null;
@@ -142,31 +153,38 @@ class APIClient {
   }
 
   setToken(token: string | null) {
+    // Kept in-memory for testing or cross-environment compatibility; never persisted in localStorage
     this.token = token;
-    try {
-      if (token) {
-        sessionStorage.setItem('urbanpulse_jwt_token', token);
-      } else {
-        sessionStorage.removeItem('urbanpulse_jwt_token');
-        localStorage.removeItem('urbanpulse_jwt_token');
-      }
-    } catch {
-      // Storage unavailable in restricted sandboxes
-    }
   }
 
   getToken(): string | null {
     return this.token;
   }
 
+  setCsrfToken(csrf: string | null) {
+    this.csrfToken = csrf;
+  }
+
+  getCsrfToken(): string | null {
+    if (this.csrfToken) return this.csrfToken;
+    if (typeof document !== 'undefined' && document.cookie) {
+      const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+      if (match) {
+        return decodeURIComponent(match[1]);
+      }
+    }
+    return null;
+  }
+
   setCurrentUser(user: { username: string; role: string; full_name: string } | null) {
     this.currentUser = user;
     try {
-      if (user) {
-        sessionStorage.setItem('urbanpulse_user', JSON.stringify(user));
-      } else {
-        sessionStorage.removeItem('urbanpulse_user');
-        localStorage.removeItem('urbanpulse_user');
+      if (typeof sessionStorage !== 'undefined') {
+        if (user) {
+          sessionStorage.setItem('urbanpulse_user', JSON.stringify(user));
+        } else {
+          sessionStorage.removeItem('urbanpulse_user');
+        }
       }
     } catch {
       // Storage unavailable
@@ -177,7 +195,7 @@ class APIClient {
     return this.currentUser;
   }
 
-  private getHeaders(customHeaders: Record<string, string> = {}): Record<string, string> {
+  private getHeaders(customHeaders: Record<string, string> = {}, method: string = 'GET'): Record<string, string> {
     const headers: Record<string, string> = {
       'Accept': 'application/json',
       ...customHeaders
@@ -185,43 +203,82 @@ class APIClient {
     if (this.token) {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
+    const upperMethod = method.toUpperCase();
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(upperMethod)) {
+      const csrf = this.getCsrfToken();
+      if (csrf) {
+        headers['X-CSRF-Token'] = csrf;
+      }
+    }
     return headers;
   }
 
   /**
-   * Unified, resilient HTTP request helper with timeout and error handling
+   * Unified, resilient HTTP request raw helper with timeout, credentials, CSRF, and error handling
    */
-  private async request<T>(
+  async requestRaw(
     endpoint: string,
     options: RequestInit = {},
-    timeoutMs: number = 5000
-  ): Promise<T> {
-    const isFormData = options.body instanceof FormData;
-    const headers: Record<string, string> = isFormData
+    timeoutMs: number = 8000
+  ): Promise<Response> {
+    const method = (options.method || 'GET').toUpperCase();
+    const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+
+    // Assemble headers
+    const customHeaders = (options.headers as Record<string, string>) || {};
+    const baseHeaders = isFormData
       ? (this.token ? { 'Authorization': `Bearer ${this.token}` } : {})
-      : this.getHeaders(options.headers as Record<string, string> || {});
+      : this.getHeaders(customHeaders, method);
+
+    // Attach CSRF header for state-changing FormData uploads as well
+    if (isFormData && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+      const csrf = this.getCsrfToken();
+      if (csrf) {
+        (baseHeaders as Record<string, string>)['X-CSRF-Token'] = csrf;
+      }
+    }
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const res = await fetch(endpoint, {
+        credentials: 'same-origin',
         ...options,
-        headers,
+        headers: baseHeaders,
         signal: controller.signal
       });
 
       if (!res.ok) {
-        throw new Error(`HTTP Error ${res.status}: ${res.statusText}`);
+        let errorDetail = res.statusText;
+        try {
+          const errorJson = await res.clone().json();
+          errorDetail = errorJson.detail || errorDetail;
+        } catch {
+          // Non-json response
+        }
+        throw new Error(`HTTP Error ${res.status}: ${errorDetail}`);
       }
-      return await res.json();
+      return res;
     } finally {
       clearTimeout(timeoutId);
     }
   }
 
-  async login(username: string, password: string): Promise<{ access_token: string; role: string; full_name: string; username: string }> {
-    const data = await this.request<{ access_token: string; role: string; full_name: string; username: string }>(
+  /**
+   * Unified, resilient JSON HTTP request helper
+   */
+  async request<T>(
+    endpoint: string,
+    options: RequestInit = {},
+    timeoutMs: number = 5000
+  ): Promise<T> {
+    const res = await this.requestRaw(endpoint, options, timeoutMs);
+    return await res.json();
+  }
+
+  async login(username: string, password: string): Promise<{ access_token: string; role: string; full_name: string; username: string; csrf_token?: string }> {
+    const data = await this.request<{ access_token: string; role: string; full_name: string; username: string; csrf_token?: string }>(
       '/api/v1/auth/login',
       {
         method: 'POST',
@@ -230,6 +287,9 @@ class APIClient {
       },
       5000
     );
+    if (data.csrf_token) {
+      this.setCsrfToken(data.csrf_token);
+    }
     this.setToken(data.access_token);
     this.setCurrentUser({
       username: data.username,
@@ -239,9 +299,16 @@ class APIClient {
     return data;
   }
 
-  logout() {
-    this.setToken(null);
-    this.setCurrentUser(null);
+  async logout(): Promise<void> {
+    try {
+      await this.request('/api/v1/auth/logout', { method: 'POST' }, 3000);
+    } catch (err) {
+      console.warn('Backend logout request failed or offline:', err);
+    } finally {
+      this.setToken(null);
+      this.setCsrfToken(null);
+      this.setCurrentUser(null);
+    }
   }
 
   /**
@@ -366,26 +433,29 @@ class APIClient {
   /**
    * Generate and trigger download of official municipal PDF Work Order
    */
-  async downloadWorkOrderPdf(issueId: string, department?: string): Promise<void> {
+  async downloadWorkOrderPdf(issueId: string, department?: string): Promise<Blob> {
     const deptParam = department ? `?department=${encodeURIComponent(department)}` : '';
-    const res = await fetch(`/api/v1/work-orders/${encodeURIComponent(issueId)}/pdf${deptParam}`, {
-      headers: this.getHeaders(),
-      signal: AbortSignal.timeout(8000)
-    });
-
-    if (!res.ok) {
-      throw new Error(`Failed to generate work order PDF: HTTP ${res.status}`);
-    }
+    const res = await this.requestRaw(
+      `/api/v1/work-orders/${encodeURIComponent(issueId)}/pdf${deptParam}`,
+      {
+        method: 'GET',
+        headers: { 'Accept': 'application/pdf' }
+      },
+      8000
+    );
 
     const blob = await res.blob();
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `WorkOrder_${issueId.toUpperCase()}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `WorkOrder_${issueId.toUpperCase()}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    }
+    return blob;
   }
 
   /**

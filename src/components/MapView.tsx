@@ -192,6 +192,15 @@ export function MapView({ events, buses, selectedEventId, onEventSelect, center,
     <div className="relative h-full">
       <div ref={mapContainerRef} className="w-full h-full" />
       {/* Map Legend */}
+      {/* Empty corridor notification overlay */}
+      {events.length === 0 && buses.length === 0 && (
+        <div className="absolute top-4 left-64 bg-slate-900/90 backdrop-blur-md border border-cyan-500/30 rounded-xl px-4 py-2 z-[1000] shadow-xl text-xs font-mono text-slate-300 flex items-center gap-2.5">
+          <i className="fa-solid fa-satellite-dish text-cyan-400 animate-pulse"></i>
+          <span>Corridor clear: 0 distress events or fleet pings recorded</span>
+        </div>
+      )}
+
+      {/* Map Legend */}
       <div className="absolute top-4 left-4 bg-gray-900/90 backdrop-blur-sm border border-gray-700 rounded-lg p-3 z-[1000]">
         <div className="text-[10px] font-semibold text-gray-300 mb-2 uppercase tracking-wider">Event Types</div>
         <div className="space-y-1.5">

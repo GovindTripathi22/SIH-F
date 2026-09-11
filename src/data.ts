@@ -4,7 +4,7 @@
 // In production, this data comes from the Edge AI pipeline.
 // ============================================================
 
-import { RoadEvent, Bus, PipelineStage, DashboardStats } from './types';
+import type { RoadEvent, Bus, PipelineStage, DashboardStats } from './types.ts';
 
 export const simulatedBuses: Bus[] = [
   {

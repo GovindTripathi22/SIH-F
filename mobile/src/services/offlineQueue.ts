@@ -75,7 +75,15 @@ export const OfflineQueue = {
     }
   },
 
+  isQueueFull(): boolean {
+    return this.getPendingCount() >= 500;
+  },
+
   enqueue(event: Omit<QueuedEvent, 'id' | 'status' | 'retryCount'>): QueuedEvent {
+    if (this.isQueueFull()) {
+      throw new Error('QUEUE_FULL: Offline storage ceiling reached (500/500 entries). Connect to network to sync pending queue.');
+    }
+
     const newEntry: QueuedEvent = {
       ...event,
       id: `queue-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,

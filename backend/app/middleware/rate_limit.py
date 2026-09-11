@@ -9,6 +9,7 @@ from typing import Dict, List
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+import secrets
 import logging
 
 from app.config import settings
@@ -51,7 +52,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """
         edge_key = request.headers.get("x-edge-device-key")
         if edge_key:
-            if settings.EDGE_DEVICE_API_KEY and edge_key == settings.EDGE_DEVICE_API_KEY:
+            if settings.EDGE_DEVICE_API_KEY and secrets.compare_digest(edge_key, settings.EDGE_DEVICE_API_KEY):
                 return f"edge:{edge_key}", settings.RATE_LIMIT_EDGE_REQUESTS
             return f"edge:{edge_key}", settings.RATE_LIMIT_REQUESTS
 

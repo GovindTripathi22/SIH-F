@@ -243,3 +243,95 @@ def test_detect_and_ingest_corridor_filtering():
             assert msg2["event_id"] == "evt-rt-2"
 
 
+def test_can_deliver_unit_matrix():
+    """
+    Direct unit tests for ConnectionManager.can_deliver():
+    - Admin bypass
+    - Target-role rejection
+    - Matching / mismatching corridors
+    - Unfiltered behavior
+    - Work order and telemetry role restrictions
+    """
+    cm = ConnectionManager()
+
+    # 1. Admin bypasses all target_roles and corridor filters
+    admin_meta = {"user": "admin@urbanpulse.bel", "role": Role.ADMIN, "corridors": {"route-1"}}
+    assert cm.can_deliver(admin_meta, {"target_roles": [Role.VIEWER]}) is True
+    assert cm.can_deliver(admin_meta, {"route_id": "route-99"}) is True
+    assert cm.can_deliver(admin_meta, {"type": "work_order_update"}) is True
+
+    # 2. Target-role rejection
+    viewer_meta = {"user": "viewer@public.gov.in", "role": Role.VIEWER, "corridors": set()}
+    operator_meta = {"user": "op@bmtc.gov.in", "role": Role.TRANSPORT_OPERATOR, "corridors": set()}
+    msg_for_operator = {"target_roles": [Role.TRANSPORT_OPERATOR], "data": "fleet alert"}
+    assert cm.can_deliver(operator_meta, msg_for_operator) is True
+    assert cm.can_deliver(viewer_meta, msg_for_operator) is False
+
+    # 3. Matching and mismatching corridors
+    corridor_meta = {"user": "op@bmtc.gov.in", "role": Role.TRANSPORT_OPERATOR, "corridors": {"route-1", "route-2"}}
+    msg_matching_route = {"route_id": "route-1", "data": "pothole on route 1"}
+    msg_matching_corridor = {"corridor_id": "route-2", "data": "crack on route 2"}
+    msg_mismatch = {"route_id": "route-3", "data": "defect on route 3"}
+    assert cm.can_deliver(corridor_meta, msg_matching_route) is True
+    assert cm.can_deliver(corridor_meta, msg_matching_corridor) is True
+    assert cm.can_deliver(corridor_meta, msg_mismatch) is False
+
+    # Corridor in nested issue object
+    msg_nested_match = {"issue": {"corridor_id": "route-1"}}
+    msg_nested_mismatch = {"issue": {"corridor_id": "route-4"}}
+    assert cm.can_deliver(corridor_meta, msg_nested_match) is True
+    assert cm.can_deliver(corridor_meta, msg_nested_mismatch) is False
+
+    # 4. Unfiltered behavior
+    unfiltered_meta = {"user": "driver@bmtc.gov.in", "role": Role.TRANSPORT_OPERATOR, "corridors": set()}
+    unfiltered_msg = {"type": "general_announcement", "text": "system online"}
+    assert cm.can_deliver(unfiltered_meta, unfiltered_msg) is True
+    assert cm.can_deliver(corridor_meta, unfiltered_msg) is True
+
+    # 5. Message type restrictions
+    assert cm.can_deliver(viewer_meta, {"type": "work_order_update"}) is False
+    assert cm.can_deliver(viewer_meta, {"type": "telemetry_update"}) is False
+    pwd_meta = {"user": "eng@bbmp.gov.in", "role": Role.PWD_ENGINEER, "corridors": set()}
+    assert cm.can_deliver(pwd_meta, {"type": "work_order_update"}) is True
+
+
+def test_two_client_isolation_with_disconnect():
+    """
+    Two-client isolation: Client A (route-1) and Client B (route-2).
+    Client A disconnects abruptly; Client B remains intact and receives subsequent route-2 messages.
+    """
+    import asyncio
+    token_a = create_access_token({"sub": "bus1@bmtc.gov.in", "role": Role.TRANSPORT_OPERATOR})
+    token_b = create_access_token({"sub": "bus2@bmtc.gov.in", "role": Role.TRANSPORT_OPERATOR})
+    client = TestClient(app)
+
+    with client.websocket_connect(f"/ws/live-feed?token={token_b}&corridor=route-2") as ws_b:
+        _ = ws_b.receive_json()  # Handshake B
+
+        with client.websocket_connect(f"/ws/live-feed?token={token_a}&corridor=route-1") as ws_a:
+            _ = ws_a.receive_json()  # Handshake A
+            # Broadcast to route-1
+            asyncio.run(manager.broadcast({"type": "issue_update", "route_id": "route-1", "id": "m1"}))
+            msg_a = ws_a.receive_json()
+            assert msg_a["id"] == "m1"
+            # ws_a closes upon exiting with block
+
+        # ws_a is now disconnected; broadcast to route-2
+        asyncio.run(manager.broadcast({"type": "issue_update", "route_id": "route-2", "id": "m2"}))
+        msg_b = ws_b.receive_json()
+        assert msg_b["id"] == "m2"
+
+
+def test_websocket_cookie_based_authentication():
+    """WebSocket feed accepts browser session cookie when token query parameter is absent"""
+    token = create_access_token({"sub": "operator@bmtc.gov.in", "role": Role.TRANSPORT_OPERATOR})
+    client = TestClient(app, cookies={"access_token": token})
+
+    with client.websocket_connect("/ws/live-feed") as ws:
+        msg = ws.receive_json()
+        assert msg["type"] == "connection_established"
+        assert msg["user"] == "operator@bmtc.gov.in"
+        assert msg["role"] == Role.TRANSPORT_OPERATOR
+
+
+
